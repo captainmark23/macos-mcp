@@ -27,17 +27,119 @@ function err(error: unknown): { isError: true; content: [{ type: "text"; text: s
   return { isError: true, content: [{ type: "text", text: `Error: ${msg}` }] };
 }
 
+/** Format a successful tool response with structured content. */
+function ok(data: object, pretty = true) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(data, null, pretty ? 2 : undefined) }],
+    structuredContent: data as Record<string, unknown>,
+  };
+}
+
+// ─── Output Schemas ─────────────────────────────────────────────
+
+const EmailSummaryZ = z.object({
+  id: z.number(),
+  subject: z.string(),
+  sender: z.string(),
+  dateReceived: z.string(),
+  read: z.boolean(),
+  flagged: z.boolean(),
+});
+
+const EmailFullZ = z.object({
+  id: z.number(),
+  subject: z.string(),
+  sender: z.string(),
+  dateReceived: z.string(),
+  dateSent: z.string(),
+  read: z.boolean(),
+  flagged: z.boolean(),
+  content: z.string(),
+  replyTo: z.string(),
+  messageId: z.string(),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+});
+
+const EventSummaryZ = z.object({
+  id: z.string(),
+  summary: z.string(),
+  startDate: z.string(),
+  endDate: z.string(),
+  location: z.string(),
+  allDay: z.boolean(),
+  calendar: z.string(),
+  status: z.string(),
+});
+
+const EventFullZ = EventSummaryZ.extend({
+  description: z.string(),
+  url: z.string(),
+  recurrence: z.string(),
+  attendees: z.array(z.object({
+    name: z.string(),
+    email: z.string(),
+    status: z.string(),
+  })),
+});
+
+const ReminderSummaryZ = z.object({
+  id: z.string(),
+  name: z.string(),
+  completed: z.boolean(),
+  completionDate: z.string(),
+  dueDate: z.string(),
+  priority: z.number(),
+  list: z.string(),
+  flagged: z.boolean(),
+});
+
+const ReminderFullZ = ReminderSummaryZ.extend({
+  body: z.string(),
+  creationDate: z.string(),
+  modificationDate: z.string(),
+});
+
+const FtsResultZ = z.object({
+  id: z.number(),
+  subject: z.string(),
+  sender: z.string(),
+  dateReceived: z.string(),
+  read: z.boolean(),
+  flagged: z.boolean(),
+  snippet: z.string(),
+});
+
+/** Build a paginated output shape for a given item schema. */
+function paginatedOutput<T extends z.ZodTypeAny>(itemSchema: T) {
+  return {
+    total: z.number(),
+    count: z.number(),
+    offset: z.number(),
+    items: z.array(itemSchema),
+    has_more: z.boolean(),
+    next_offset: z.number().optional(),
+  };
+}
+
+const SuccessZ = { success: z.boolean() };
+const SuccessMessageZ = { success: z.boolean(), message: z.string() };
+const SuccessIdZ = { success: z.boolean(), id: z.string() };
+
 // ═══════════════════════════════════════════════════════════════════
 // MAIL TOOLS
 // ═══════════════════════════════════════════════════════════════════
 
 server.registerTool("mail_list_accounts", {
   description: "List all configured email accounts in Apple Mail",
+  outputSchema: {
+    accounts: z.array(z.object({ name: z.string(), id: z.string() })),
+  },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async () => {
   try {
     const accounts = await mail.listAccounts();
-    return { content: [{ type: "text", text: JSON.stringify(accounts, null, 2) }] };
+    return ok({ accounts });
   } catch (e) { return err(e); }
 });
 
@@ -46,11 +148,14 @@ server.registerTool("mail_list_mailboxes", {
   inputSchema: {
     account: z.string().optional().describe("Account name (default: first account)"),
   },
+  outputSchema: {
+    mailboxes: z.array(z.object({ name: z.string(), unreadCount: z.number() })),
+  },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ account }) => {
   try {
     const mailboxes = await mail.listMailboxes(account);
-    return { content: [{ type: "text", text: JSON.stringify(mailboxes, null, 2) }] };
+    return ok({ mailboxes });
   } catch (e) { return err(e); }
 });
 
@@ -60,14 +165,15 @@ server.registerTool("mail_get_emails", {
     mailbox: z.string().default("INBOX").describe("Mailbox name"),
     account: z.string().optional().describe("Account name"),
     filter: z.enum(["all", "unread", "flagged", "today", "this_week"]).default("all").describe("Filter: all, unread, flagged, today, this_week"),
-    limit: z.number().default(50).describe("Max emails to return"),
-    offset: z.number().default(0).describe("Number of results to skip for pagination"),
+    limit: z.number().min(1).max(500).default(50).describe("Max emails to return"),
+    offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
+  outputSchema: paginatedOutput(EmailSummaryZ),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ mailbox, account, filter, limit, offset }) => {
   try {
     const result = await mail.getEmails(mailbox, account, filter, limit, offset);
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    return ok(result);
   } catch (e) { return err(e); }
 });
 
@@ -78,11 +184,12 @@ server.registerTool("mail_get_email", {
     mailbox: z.string().default("INBOX"),
     account: z.string().optional(),
   },
+  outputSchema: EmailFullZ.shape,
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ messageId, mailbox, account }) => {
   try {
     const email = await mail.getEmail(messageId, mailbox, account);
-    return { content: [{ type: "text", text: JSON.stringify(email, null, 2) }] };
+    return ok(email);
   } catch (e) { return err(e); }
 });
 
@@ -93,49 +200,52 @@ server.registerTool("mail_search", {
     scope: z.enum(["all", "subject", "sender"]).default("all").describe("Where to search"),
     mailbox: z.string().default("INBOX"),
     account: z.string().optional(),
-    limit: z.number().default(20),
-    offset: z.number().default(0).describe("Number of results to skip for pagination"),
+    limit: z.number().min(1).max(500).default(20).describe("Max results to return"),
+    offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
+  outputSchema: paginatedOutput(EmailSummaryZ),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ query, scope, mailbox, account, limit, offset }) => {
   try {
     const results = await mail.searchMail(query, scope, mailbox, account, limit, offset);
-    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    return ok(results);
   } catch (e) { return err(e); }
 });
 
 server.registerTool("mail_send", {
   description: "Send an email. For important emails, prefer mail_create_draft so the user can review first.",
   inputSchema: {
-    to: z.array(z.string()).describe("Recipient email addresses"),
+    to: z.array(z.string().email()).describe("Recipient email addresses"),
     subject: z.string().describe("Email subject"),
     body: z.string().describe("Email body text"),
-    cc: z.array(z.string()).optional().describe("CC addresses"),
-    bcc: z.array(z.string()).optional().describe("BCC addresses"),
+    cc: z.array(z.string().email()).optional().describe("CC addresses"),
+    bcc: z.array(z.string().email()).optional().describe("BCC addresses"),
     account: z.string().optional(),
   },
+  outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 }, async ({ to, subject, body, cc, bcc, account }) => {
   try {
     const result = await mail.sendEmail(to, subject, body, cc, bcc, account);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
 server.registerTool("mail_create_draft", {
   description: "Create a draft email for user review in Mail.app. Preferred for important emails.",
   inputSchema: {
-    to: z.array(z.string()).describe("Recipient email addresses"),
+    to: z.array(z.string().email()).describe("Recipient email addresses"),
     subject: z.string(),
     body: z.string(),
-    cc: z.array(z.string()).optional(),
+    cc: z.array(z.string().email()).optional(),
     account: z.string().optional(),
   },
+  outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 }, async ({ to, subject, body, cc, account }) => {
   try {
     const result = await mail.createDraft(to, subject, body, cc, account);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -149,11 +259,12 @@ server.registerTool("mail_reply", {
     mailbox: z.string().default("INBOX"),
     account: z.string().optional(),
   },
+  outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 }, async ({ messageId, body, replyAll, send, mailbox, account }) => {
   try {
     const result = await mail.replyTo(messageId, body, replyAll, send, mailbox, account);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -161,17 +272,18 @@ server.registerTool("mail_forward", {
   description: "Forward an email. Set send=false to save as draft for review.",
   inputSchema: {
     messageId: z.number().describe("Email ID to forward"),
-    to: z.array(z.string()).describe("Forward to these addresses"),
+    to: z.array(z.string().email()).describe("Forward to these addresses"),
     body: z.string().optional().describe("Message to prepend"),
     send: z.boolean().default(true),
     mailbox: z.string().default("INBOX"),
     account: z.string().optional(),
   },
+  outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 }, async ({ messageId, to, body, send, mailbox, account }) => {
   try {
     const result = await mail.forwardMessage(messageId, to, body, send, mailbox, account);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -183,11 +295,12 @@ server.registerTool("mail_move", {
     sourceMailbox: z.string().default("INBOX"),
     account: z.string().optional(),
   },
+  outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ messageId, targetMailbox, sourceMailbox, account }) => {
   try {
     const result = await mail.moveMessage(messageId, targetMailbox, sourceMailbox, account);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -200,11 +313,12 @@ server.registerTool("mail_set_flags", {
     mailbox: z.string().default("INBOX"),
     account: z.string().optional(),
   },
+  outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ messageId, flagged, read, mailbox, account }) => {
   try {
     const result = await mail.setMessageFlags(messageId, flagged, read, mailbox, account);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -218,14 +332,15 @@ server.registerTool("mail_search_body", {
     query: z.string().describe("Search term(s) to find in email bodies"),
     mailbox: z.string().default("INBOX"),
     account: z.string().optional(),
-    limit: z.number().default(20),
-    offset: z.number().default(0).describe("Number of results to skip for pagination"),
+    limit: z.number().min(1).max(500).default(20).describe("Max results to return"),
+    offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
+  outputSchema: paginatedOutput(FtsResultZ),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ query, mailbox, account, limit, offset }) => {
   try {
     const results = await mailFts.searchBody(query, mailbox, account, limit, offset);
-    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    return ok(results);
   } catch (e) { return err(e); }
 });
 
@@ -233,7 +348,12 @@ server.registerTool("mail_fts_index", {
   description: "Build or update the full-text search index for email bodies. Run with rebuild=true for a full re-index, or rebuild=false (default) for incremental updates.",
   inputSchema: {
     rebuild: z.boolean().default(false).describe("Full rebuild (true) or incremental update (false)"),
-    limit: z.number().default(5000).describe("Max messages to process per batch"),
+    limit: z.number().min(1).max(50000).default(5000).describe("Max messages to process per batch"),
+  },
+  outputSchema: {
+    indexed: z.number(),
+    skipped: z.number(),
+    total: z.number(),
   },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ rebuild, limit }) => {
@@ -241,17 +361,23 @@ server.registerTool("mail_fts_index", {
     const result = rebuild
       ? await mailFts.rebuildIndex(limit)
       : await mailFts.indexNewMessages(limit);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
 server.registerTool("mail_fts_stats", {
   description: "Get statistics about the full-text search index: how many messages are indexed, total messages, index size.",
+  outputSchema: {
+    indexedCount: z.number(),
+    totalMessages: z.number(),
+    lastIndexedRowid: z.number(),
+    dbSizeMb: z.number(),
+  },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async () => {
   try {
     const stats = await mailFts.getIndexStats();
-    return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+    return ok(stats);
   } catch (e) { return err(e); }
 });
 
@@ -261,11 +387,19 @@ server.registerTool("mail_fts_stats", {
 
 server.registerTool("calendar_list", {
   description: "List all calendars (iCloud, Google, Exchange, etc.)",
+  outputSchema: {
+    calendars: z.array(z.object({
+      name: z.string(),
+      id: z.string(),
+      writable: z.boolean(),
+      color: z.string(),
+    })),
+  },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async () => {
   try {
     const calendars = await calendar.listCalendars();
-    return { content: [{ type: "text", text: JSON.stringify(calendars, null, 2) }] };
+    return ok({ calendars });
   } catch (e) { return err(e); }
 });
 
@@ -273,14 +407,15 @@ server.registerTool("calendar_today", {
   description: "Get all events for today. Returns pagination metadata.",
   inputSchema: {
     calendar: z.string().optional().describe("Calendar name (default: all calendars)"),
-    limit: z.number().default(200).describe("Max events to return"),
-    offset: z.number().default(0).describe("Number of results to skip for pagination"),
+    limit: z.number().min(1).max(500).default(200).describe("Max events to return"),
+    offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
+  outputSchema: paginatedOutput(EventSummaryZ),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ calendar: cal, limit, offset }) => {
   try {
     const events = await calendar.getEventsToday(cal, limit, offset);
-    return { content: [{ type: "text", text: JSON.stringify(events, null, 2) }] };
+    return ok(events);
   } catch (e) { return err(e); }
 });
 
@@ -288,14 +423,15 @@ server.registerTool("calendar_this_week", {
   description: "Get all events for the next 7 days. Returns pagination metadata.",
   inputSchema: {
     calendar: z.string().optional(),
-    limit: z.number().default(200).describe("Max events to return"),
-    offset: z.number().default(0).describe("Number of results to skip for pagination"),
+    limit: z.number().min(1).max(500).default(200).describe("Max events to return"),
+    offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
+  outputSchema: paginatedOutput(EventSummaryZ),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ calendar: cal, limit, offset }) => {
   try {
     const events = await calendar.getEventsThisWeek(cal, limit, offset);
-    return { content: [{ type: "text", text: JSON.stringify(events, null, 2) }] };
+    return ok(events);
   } catch (e) { return err(e); }
 });
 
@@ -305,14 +441,15 @@ server.registerTool("calendar_get_events", {
     startDate: z.string().describe("Start date (ISO 8601, e.g. 2026-03-08)"),
     endDate: z.string().describe("End date (ISO 8601)"),
     calendar: z.string().optional(),
-    limit: z.number().default(200).describe("Max events to return"),
-    offset: z.number().default(0).describe("Number of results to skip for pagination"),
+    limit: z.number().min(1).max(500).default(200).describe("Max events to return"),
+    offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
+  outputSchema: paginatedOutput(EventSummaryZ),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ startDate, endDate, calendar: cal, limit, offset }) => {
   try {
     const events = await calendar.getEvents(startDate, endDate, cal, limit, offset);
-    return { content: [{ type: "text", text: JSON.stringify(events, null, 2) }] };
+    return ok(events);
   } catch (e) { return err(e); }
 });
 
@@ -322,11 +459,12 @@ server.registerTool("calendar_get_event", {
     eventId: z.string().describe("Event ID (from calendar_today etc.)"),
     calendar: z.string().describe("Calendar name the event belongs to"),
   },
+  outputSchema: EventFullZ.shape,
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ eventId, calendar: cal }) => {
   try {
     const event = await calendar.getEvent(eventId, cal);
-    return { content: [{ type: "text", text: JSON.stringify(event, null, 2) }] };
+    return ok(event);
   } catch (e) { return err(e); }
 });
 
@@ -341,11 +479,12 @@ server.registerTool("calendar_create_event", {
     description: z.string().optional(),
     allDay: z.boolean().default(false),
   },
+  outputSchema: SuccessIdZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 }, async ({ summary, startDate, endDate, calendar: cal, location, description, allDay }) => {
   try {
     const result = await calendar.createEvent(summary, startDate, endDate, cal, location, description, allDay);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -360,11 +499,12 @@ server.registerTool("calendar_modify_event", {
     location: z.string().optional(),
     description: z.string().optional(),
   },
+  outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 }, async ({ eventId, calendar: cal, ...updates }) => {
   try {
     const result = await calendar.modifyEvent(eventId, cal, updates);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -374,11 +514,12 @@ server.registerTool("calendar_delete_event", {
     eventId: z.string(),
     calendar: z.string(),
   },
+  outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
 }, async ({ eventId, calendar: cal }) => {
   try {
     const result = await calendar.deleteEvent(eventId, cal);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -388,11 +529,14 @@ server.registerTool("calendar_delete_event", {
 
 server.registerTool("reminders_list_lists", {
   description: "List all reminder lists",
+  outputSchema: {
+    lists: z.array(z.object({ name: z.string(), id: z.string(), count: z.number() })),
+  },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async () => {
   try {
     const lists = await reminders.listReminderLists();
-    return { content: [{ type: "text", text: JSON.stringify(lists, null, 2) }] };
+    return ok({ lists });
   } catch (e) { return err(e); }
 });
 
@@ -401,14 +545,15 @@ server.registerTool("reminders_get", {
   inputSchema: {
     list: z.string().optional().describe("Reminder list name (default: all lists)"),
     filter: z.enum(["all", "incomplete", "completed", "due_today", "overdue", "flagged"]).default("incomplete").describe("Filter: incomplete (default), due_today, overdue, flagged, completed, all"),
-    limit: z.number().default(50).describe("Max reminders to return"),
-    offset: z.number().default(0).describe("Number of results to skip for pagination"),
+    limit: z.number().min(1).max(500).default(50).describe("Max reminders to return"),
+    offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
+  outputSchema: paginatedOutput(ReminderSummaryZ),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ list, filter, limit, offset }) => {
   try {
     const items = await reminders.getReminders(list, filter, limit, offset);
-    return { content: [{ type: "text", text: JSON.stringify(items, null, 2) }] };
+    return ok(items);
   } catch (e) { return err(e); }
 });
 
@@ -418,11 +563,12 @@ server.registerTool("reminders_get_detail", {
     reminderId: z.string(),
     list: z.string().describe("Reminder list name"),
   },
+  outputSchema: ReminderFullZ.shape,
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ reminderId, list }) => {
   try {
     const item = await reminders.getReminder(reminderId, list);
-    return { content: [{ type: "text", text: JSON.stringify(item, null, 2) }] };
+    return ok(item);
   } catch (e) { return err(e); }
 });
 
@@ -436,11 +582,12 @@ server.registerTool("reminders_create", {
     priority: z.number().optional().describe("Priority: 0=none, 1=high, 5=medium, 9=low"),
     flagged: z.boolean().optional(),
   },
+  outputSchema: SuccessIdZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 }, async ({ name, list, dueDate, body, priority, flagged }) => {
   try {
     const result = await reminders.createReminder(name, list, dueDate, body, priority, flagged);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -450,11 +597,12 @@ server.registerTool("reminders_complete", {
     reminderId: z.string(),
     list: z.string(),
   },
+  outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 }, async ({ reminderId, list }) => {
   try {
     const result = await reminders.completeReminder(reminderId, list);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -464,11 +612,12 @@ server.registerTool("reminders_delete", {
     reminderId: z.string(),
     list: z.string(),
   },
+  outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
 }, async ({ reminderId, list }) => {
   try {
     const result = await reminders.deleteReminder(reminderId, list);
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    return ok(result, false);
   } catch (e) { return err(e); }
 });
 
@@ -478,6 +627,24 @@ server.registerTool("reminders_delete", {
 
 server.registerTool("daily_briefing", {
   description: "Get a complete daily briefing: today's calendar events, due/overdue reminders, and flagged/unread emails. Perfect for morning check-ins.",
+  outputSchema: {
+    date: z.string(),
+    calendar: z.object({
+      count: z.number(),
+      events: z.array(EventSummaryZ),
+    }),
+    reminders: z.object({
+      dueToday: z.array(ReminderSummaryZ),
+      overdue: z.array(ReminderSummaryZ),
+      incomplete: z.array(ReminderSummaryZ),
+    }),
+    mail: z.object({
+      flaggedCount: z.number(),
+      flagged: z.array(EmailSummaryZ),
+      unreadCount: z.number(),
+      unread: z.array(EmailSummaryZ),
+    }),
+  },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async () => {
   try {
@@ -515,7 +682,7 @@ server.registerTool("daily_briefing", {
       },
     };
 
-    return { content: [{ type: "text", text: JSON.stringify(briefing, null, 2) }] };
+    return ok(briefing);
   } catch (e) { return err(e); }
 });
 
