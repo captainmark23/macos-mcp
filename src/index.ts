@@ -805,69 +805,80 @@ server.registerTool("contacts_search", {
 // RESOURCES
 // ═══════════════════════════════════════════════════════════════════
 
+/** Wrap a resource handler with error handling. */
+function resource(uri: string, fn: () => Promise<unknown>) {
+  return async () => {
+    try {
+      return {
+        contents: [{
+          uri,
+          mimeType: "application/json",
+          text: JSON.stringify(await fn(), null, 2),
+        }],
+      };
+    } catch (e) {
+      return {
+        contents: [{
+          uri,
+          mimeType: "text/plain",
+          text: `Error: ${e instanceof Error ? e.message : String(e)}`,
+        }],
+      };
+    }
+  };
+}
+
 server.registerResource(
   "mail_accounts",
   "macos://mail/accounts",
   { description: "List of configured email accounts in Apple Mail" },
-  async () => ({
-    contents: [{
-      uri: "macos://mail/accounts",
-      mimeType: "application/json",
-      text: JSON.stringify(await mail.listAccounts(), null, 2),
-    }],
-  })
+  resource("macos://mail/accounts", () => mail.listAccounts())
 );
 
 server.registerResource(
   "mail_mailboxes",
   new ResourceTemplate("macos://mail/{account}/mailboxes", { list: undefined }),
   { description: "List mailboxes for a specific email account" },
-  async (uri, { account }) => ({
-    contents: [{
-      uri: uri.href,
-      mimeType: "application/json",
-      text: JSON.stringify(await mail.listMailboxes(account as string), null, 2),
-    }],
-  })
+  async (uri, { account }) => {
+    try {
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(await mail.listMailboxes(account as string), null, 2),
+        }],
+      };
+    } catch (e) {
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: "text/plain",
+          text: `Error: ${e instanceof Error ? e.message : String(e)}`,
+        }],
+      };
+    }
+  }
 );
 
 server.registerResource(
   "calendars",
   "macos://calendars",
   { description: "List of all calendars (iCloud, Google, Exchange, etc.)" },
-  async () => ({
-    contents: [{
-      uri: "macos://calendars",
-      mimeType: "application/json",
-      text: JSON.stringify(await calendar.listCalendars(), null, 2),
-    }],
-  })
+  resource("macos://calendars", () => calendar.listCalendars())
 );
 
 server.registerResource(
   "reminder_lists",
   "macos://reminders/lists",
   { description: "List of all reminder lists" },
-  async () => ({
-    contents: [{
-      uri: "macos://reminders/lists",
-      mimeType: "application/json",
-      text: JSON.stringify(await reminders.listReminderLists(), null, 2),
-    }],
-  })
+  resource("macos://reminders/lists", () => reminders.listReminderLists())
 );
 
 server.registerResource(
   "contacts_list",
   "macos://contacts",
-  { description: "Browsable contacts from macOS Address Book" },
-  async () => ({
-    contents: [{
-      uri: "macos://contacts",
-      mimeType: "application/json",
-      text: JSON.stringify(await contacts.listContacts(undefined, 100, 0), null, 2),
-    }],
-  })
+  { description: "Browsable contacts from macOS Address Book (first 25)" },
+  resource("macos://contacts", () => contacts.listContacts(undefined, 25, 0))
 );
 
 // ═══════════════════════════════════════════════════════════════════

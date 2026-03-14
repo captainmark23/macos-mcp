@@ -413,7 +413,7 @@ export async function replyTo(
     ${acctSetup}
     const mb = acct.mailboxes.byName(${jxaString(mailbox)});
     const ids = mb.messages.id();
-    const idx = ids.indexOf(${messageId});
+    const idx = ids.indexOf(${safeInt(messageId)});
     if (idx === -1) throw new Error("Message not found");
     const msg = mb.messages[idx];
     const reply = msg.reply({ replyToAll: ${replyAll}, openingWindow: ${!send} });
@@ -445,7 +445,7 @@ export async function forwardMessage(
     ${acctSetup}
     const mb = acct.mailboxes.byName(${jxaString(mailbox)});
     const ids = mb.messages.id();
-    const idx = ids.indexOf(${messageId});
+    const idx = ids.indexOf(${safeInt(messageId)});
     if (idx === -1) throw new Error("Message not found");
     const msg = mb.messages[idx];
     const fwd = msg.forward({ openingWindow: ${!send} });
@@ -480,7 +480,7 @@ export async function moveMessage(
     const srcMb = acct.mailboxes.byName(${jxaString(sourceMailbox)});
     const tgtMb = acct.mailboxes.byName(${jxaString(targetMailbox)});
     const ids = srcMb.messages.id();
-    const idx = ids.indexOf(${messageId});
+    const idx = ids.indexOf(${safeInt(messageId)});
     if (idx === -1) throw new Error("Message not found");
     Mail.move(srcMb.messages[idx], { to: tgtMb });
     JSON.stringify({ success: true });
@@ -507,7 +507,7 @@ export async function setMessageFlags(
     ${acctSetup}
     const mb = acct.mailboxes.byName(${jxaString(mailbox)});
     const ids = mb.messages.id();
-    const idx = ids.indexOf(${messageId});
+    const idx = ids.indexOf(${safeInt(messageId)});
     if (idx === -1) throw new Error("Message not found");
     const m = mb.messages[idx];
     ${flagOps.join("\n    ")}
