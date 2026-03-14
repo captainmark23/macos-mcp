@@ -106,6 +106,21 @@ function cleanBodyForDisplay(raw: string): string {
   return text.substring(0, 50_000);
 }
 
+/** Get a short body preview for an email (first ~200 chars of cleaned body). */
+function getBodyPreview(messageId: number, mailboxUrl: string): string {
+  try {
+    const emlxPath = resolveEmlxPath(messageId, mailboxUrl);
+    if (!emlxPath) return "";
+    const rawBody = parseEmlxBody(emlxPath);
+    let text = decodeQuotedPrintable(rawBody);
+    text = stripHtml(text);
+    text = text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+    return text.substring(0, 200);
+  } catch {
+    return "";
+  }
+}
+
 // ─── Types ───────────────────────────────────────────────────────
 
 export interface Account {
@@ -127,6 +142,7 @@ export interface EmailSummary {
   flagged: boolean;
   mailbox: string;
   account: string;
+  preview: string;
 }
 
 export interface EmailFull extends EmailSummary {
@@ -226,8 +242,9 @@ export async function getEmails(
 
   const items = rows.map((r) => {
     const parsed = parseMailboxUrl(String(r.mailbox_url || ""));
+    const id = safeInt(r.id);
     return {
-      id: safeInt(r.id),
+      id,
       subject: String(r.subject || ""),
       sender: String(r.sender || ""),
       dateReceived: String(r.date_received || ""),
@@ -235,6 +252,7 @@ export async function getEmails(
       flagged: r.flagged === 1,
       mailbox: parsed?.mailboxName || "",
       account: (parsed ? accountMap.get(parsed.accountId) : undefined) || "",
+      preview: getBodyPreview(id, String(r.mailbox_url || "")),
     };
   });
 
@@ -352,6 +370,7 @@ export async function getEmail(
     cc: ccRows.map((c) => String(c.address || "")),
     mailbox: parsed?.mailboxName || "",
     account: (parsed ? accountMap.get(parsed.accountId) : undefined) || "",
+    preview: content.substring(0, 200),
   };
 }
 
@@ -416,8 +435,9 @@ export async function searchMail(
 
   const items = rows.map((r) => {
     const parsed = parseMailboxUrl(String(r.mailbox_url || ""));
+    const id = safeInt(r.id);
     return {
-      id: safeInt(r.id),
+      id,
       subject: String(r.subject || ""),
       sender: String(r.sender || ""),
       dateReceived: String(r.date_received || ""),
@@ -425,6 +445,7 @@ export async function searchMail(
       flagged: r.flagged === 1,
       mailbox: parsed?.mailboxName || "",
       account: (parsed ? accountMap.get(parsed.accountId) : undefined) || "",
+      preview: getBodyPreview(id, String(r.mailbox_url || "")),
     };
   });
 

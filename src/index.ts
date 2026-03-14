@@ -47,6 +47,7 @@ const EmailSummaryZ = z.object({
   flagged: z.boolean(),
   mailbox: z.string(),
   account: z.string(),
+  preview: z.string().describe("First ~200 chars of email body text — use this to understand what the email is actually about before presenting it to the user"),
 });
 
 const EmailFullZ = z.object({
@@ -166,7 +167,7 @@ server.registerTool("mail_list_mailboxes", {
 });
 
 server.registerTool("mail_get_emails", {
-  description: "Get emails with optional filtering. Shows which account and mailbox each email belongs to. Omit mailbox to search across all mailboxes and accounts. Returns newest first with pagination metadata.",
+  description: "Get emails with optional filtering. Each result includes the account, mailbox, and a body preview (~200 chars). Omit mailbox to search across all mailboxes and accounts. TRIAGE GUIDELINES: (1) Group results by account when presenting to the user. (2) Use the preview field to understand what each email is about — never guess from the subject line alone. (3) For any email you want to describe in detail, call mail_get_email first to read the full body. Returns newest first with pagination metadata.",
   inputSchema: {
     mailbox: z.string().optional().describe("Mailbox name (e.g. 'INBOX'). Omit to search all mailboxes across all accounts."),
     account: z.string().optional().describe("Account name (e.g. 'iCloud'). Omit to search all accounts."),
@@ -198,7 +199,7 @@ server.registerTool("mail_get_email", {
 });
 
 server.registerTool("mail_search", {
-  description: "Search emails by subject and/or sender. Shows which account and mailbox each result belongs to. Omit mailbox to search across all mailboxes and accounts. Returns pagination metadata.",
+  description: "Search emails by subject and/or sender. Each result includes the account, mailbox, and a body preview (~200 chars). Omit mailbox to search across all mailboxes and accounts. Use the preview field to understand results — never guess content from the subject line alone. Returns pagination metadata.",
   inputSchema: {
     query: z.string().describe("Search term"),
     scope: z.enum(["all", "subject", "sender"]).default("all").describe("Where to search"),
@@ -643,7 +644,7 @@ server.registerTool("reminders_delete", {
 // ═══════════════════════════════════════════════════════════════════
 
 server.registerTool("daily_briefing", {
-  description: "Get a complete daily briefing: today's calendar events, due/overdue reminders, and flagged/unread emails. Perfect for morning check-ins.",
+  description: "Get a complete daily briefing: today's calendar events, due/overdue reminders, and flagged/unread emails. Each email includes a body preview. When presenting the briefing: (1) Group emails by account. (2) Use the preview field to accurately describe each email — never guess from the subject line. (3) Call mail_get_email for any email you want to summarize in detail.",
   inputSchema: {},
   outputSchema: {
     date: z.string(),
