@@ -22,9 +22,12 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
-/** Wrap handler with standard error handling. */
+import { sanitizeErrorMessage } from "./shared/types.js";
+
+/** Wrap handler with standard error handling. Sanitizes paths from messages. */
 function err(error: unknown): { isError: true; content: [{ type: "text"; text: string }] } {
-  const msg = error instanceof Error ? error.message : String(error);
+  const raw = error instanceof Error ? error.message : String(error);
+  const msg = sanitizeErrorMessage(raw);
   return { isError: true, content: [{ type: "text", text: `Error: ${msg}` }] };
 }
 
@@ -137,6 +140,7 @@ const SuccessIdZ = { success: z.boolean(), id: z.string() };
 // ═══════════════════════════════════════════════════════════════════
 
 server.registerTool("mail_list_accounts", {
+  title: "List Mail Accounts",
   description: "List all configured email accounts in Apple Mail",
   inputSchema: {},
   outputSchema: {
@@ -151,9 +155,10 @@ server.registerTool("mail_list_accounts", {
 });
 
 server.registerTool("mail_list_mailboxes", {
+  title: "List Mailboxes",
   description: "List all mailboxes for an email account",
   inputSchema: {
-    account: z.string().optional().describe("Account name (default: first account)"),
+    account: z.string().max(200).optional().describe("Account name (default: first account)"),
   },
   outputSchema: {
     mailboxes: z.array(z.object({ name: z.string(), unreadCount: z.number() })),
@@ -167,10 +172,11 @@ server.registerTool("mail_list_mailboxes", {
 });
 
 server.registerTool("mail_get_emails", {
+  title: "Get Emails",
   description: "Get emails with optional filtering. Each result includes the account, mailbox, and a body preview (~200 chars). Omit mailbox to search across all mailboxes and accounts. TRIAGE GUIDELINES: (1) Group results by account when presenting to the user. (2) Use the preview field to understand what each email is about — never guess from the subject line alone. (3) For any email you want to describe in detail, call mail_get_email first to read the full body. Returns newest first with pagination metadata.",
   inputSchema: {
-    mailbox: z.string().optional().describe("Mailbox name (e.g. 'INBOX'). Omit to search all mailboxes across all accounts."),
-    account: z.string().optional().describe("Account name (e.g. 'iCloud'). Omit to search all accounts."),
+    mailbox: z.string().max(200).optional().describe("Mailbox name (e.g. 'INBOX'). Omit to search all mailboxes across all accounts."),
+    account: z.string().max(200).optional().describe("Account name (e.g. 'iCloud'). Omit to search all accounts."),
     filter: z.enum(["all", "unread", "flagged", "today", "this_week"]).default("all").describe("Filter: all, unread, flagged, today, this_week"),
     limit: z.number().min(1).max(500).default(50).describe("Max emails to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
@@ -185,6 +191,7 @@ server.registerTool("mail_get_emails", {
 });
 
 server.registerTool("mail_get_email", {
+  title: "Get Email Details",
   description: "Get a single email with full content including body text. Reads the email body directly from disk — no need to specify mailbox or account. Returns the account and mailbox the email belongs to.",
   inputSchema: {
     messageId: z.number().describe("Email ID (from mail_get_emails or mail_search)"),
@@ -199,12 +206,13 @@ server.registerTool("mail_get_email", {
 });
 
 server.registerTool("mail_search", {
+  title: "Search Emails",
   description: "Search emails by subject and/or sender. Each result includes the account, mailbox, and a body preview (~200 chars). Omit mailbox to search across all mailboxes and accounts. Use the preview field to understand results — never guess content from the subject line alone. Returns pagination metadata.",
   inputSchema: {
-    query: z.string().describe("Search term"),
+    query: z.string().max(1000).describe("Search term"),
     scope: z.enum(["all", "subject", "sender"]).default("all").describe("Where to search"),
-    mailbox: z.string().optional().describe("Mailbox name. Omit to search all mailboxes across all accounts."),
-    account: z.string().optional().describe("Account name. Omit to search all accounts."),
+    mailbox: z.string().max(200).optional().describe("Mailbox name. Omit to search all mailboxes across all accounts."),
+    account: z.string().max(200).optional().describe("Account name. Omit to search all accounts."),
     limit: z.number().min(1).max(500).default(20).describe("Max results to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
@@ -218,14 +226,15 @@ server.registerTool("mail_search", {
 });
 
 server.registerTool("mail_send", {
+  title: "Send Email",
   description: "Send an email. For important emails, prefer mail_create_draft so the user can review first.",
   inputSchema: {
     to: z.array(z.string().email()).describe("Recipient email addresses"),
-    subject: z.string().describe("Email subject"),
-    body: z.string().describe("Email body text"),
+    subject: z.string().max(1000).describe("Email subject"),
+    body: z.string().max(100000).describe("Email body text"),
     cc: z.array(z.string().email()).optional().describe("CC addresses"),
     bcc: z.array(z.string().email()).optional().describe("BCC addresses"),
-    account: z.string().optional(),
+    account: z.string().max(200).optional(),
   },
   outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -237,13 +246,14 @@ server.registerTool("mail_send", {
 });
 
 server.registerTool("mail_create_draft", {
+  title: "Create Email Draft",
   description: "Create a draft email for user review in Mail.app. Preferred for important emails.",
   inputSchema: {
     to: z.array(z.string().email()).describe("Recipient email addresses"),
-    subject: z.string(),
-    body: z.string(),
+    subject: z.string().max(1000),
+    body: z.string().max(100000),
     cc: z.array(z.string().email()).optional(),
-    account: z.string().optional(),
+    account: z.string().max(200).optional(),
   },
   outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -255,14 +265,15 @@ server.registerTool("mail_create_draft", {
 });
 
 server.registerTool("mail_reply", {
+  title: "Reply to Email",
   description: "Reply to an email. Set send=false to save as draft for review.",
   inputSchema: {
     messageId: z.number().describe("Email ID to reply to"),
-    body: z.string().describe("Reply body"),
+    body: z.string().max(100000).describe("Reply body"),
     replyAll: z.boolean().default(false),
     send: z.boolean().default(true).describe("Send immediately or save as draft"),
-    mailbox: z.string().default("INBOX"),
-    account: z.string().optional(),
+    mailbox: z.string().max(200).default("INBOX"),
+    account: z.string().max(200).optional(),
   },
   outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -274,14 +285,15 @@ server.registerTool("mail_reply", {
 });
 
 server.registerTool("mail_forward", {
+  title: "Forward Email",
   description: "Forward an email. Set send=false to save as draft for review.",
   inputSchema: {
     messageId: z.number().describe("Email ID to forward"),
     to: z.array(z.string().email()).describe("Forward to these addresses"),
-    body: z.string().optional().describe("Message to prepend"),
+    body: z.string().max(100000).optional().describe("Message to prepend"),
     send: z.boolean().default(true),
-    mailbox: z.string().default("INBOX"),
-    account: z.string().optional(),
+    mailbox: z.string().max(200).default("INBOX"),
+    account: z.string().max(200).optional(),
   },
   outputSchema: SuccessMessageZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -293,12 +305,13 @@ server.registerTool("mail_forward", {
 });
 
 server.registerTool("mail_move", {
+  title: "Move Email",
   description: "Move an email to a different mailbox",
   inputSchema: {
     messageId: z.number(),
-    targetMailbox: z.string().describe("Destination mailbox name"),
-    sourceMailbox: z.string().default("INBOX"),
-    account: z.string().optional(),
+    targetMailbox: z.string().max(200).describe("Destination mailbox name"),
+    sourceMailbox: z.string().max(200).default("INBOX"),
+    account: z.string().max(200).optional(),
   },
   outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -310,13 +323,14 @@ server.registerTool("mail_move", {
 });
 
 server.registerTool("mail_set_flags", {
+  title: "Set Email Flags",
   description: "Set flagged and/or read status on an email",
   inputSchema: {
     messageId: z.number(),
     flagged: z.boolean().optional().describe("Set flagged status"),
     read: z.boolean().optional().describe("Set read status"),
-    mailbox: z.string().default("INBOX"),
-    account: z.string().optional(),
+    mailbox: z.string().max(200).default("INBOX"),
+    account: z.string().max(200).optional(),
   },
   outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -332,11 +346,12 @@ server.registerTool("mail_set_flags", {
 // ═══════════════════════════════════════════════════════════════════
 
 server.registerTool("mail_search_body", {
+  title: "Search Email Bodies",
   description: "Search email body content using full-text search. Searches inside the actual email text, not just subject/sender. Requires the FTS index to be built first (use mail_fts_index). Returns pagination metadata.",
   inputSchema: {
-    query: z.string().describe("Search term(s) to find in email bodies"),
-    mailbox: z.string().default("INBOX"),
-    account: z.string().optional(),
+    query: z.string().max(1000).describe("Search term(s) to find in email bodies"),
+    mailbox: z.string().max(200).default("INBOX"),
+    account: z.string().max(200).optional(),
     limit: z.number().min(1).max(500).default(20).describe("Max results to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
@@ -350,6 +365,7 @@ server.registerTool("mail_search_body", {
 });
 
 server.registerTool("mail_fts_index", {
+  title: "Build FTS Index",
   description: "Build or update the full-text search index for email bodies. Run with rebuild=true for a full re-index, or rebuild=false (default) for incremental updates.",
   inputSchema: {
     rebuild: z.boolean().default(false).describe("Full rebuild (true) or incremental update (false)"),
@@ -381,6 +397,7 @@ server.registerTool("mail_fts_index", {
 });
 
 server.registerTool("mail_fts_stats", {
+  title: "FTS Index Statistics",
   description: "Get statistics about the full-text search index: how many messages are indexed, total messages, index size.",
   inputSchema: {},
   outputSchema: {
@@ -402,6 +419,7 @@ server.registerTool("mail_fts_stats", {
 // ═══════════════════════════════════════════════════════════════════
 
 server.registerTool("calendar_list", {
+  title: "List Calendars",
   description: "List all calendars (iCloud, Google, Exchange, etc.)",
   inputSchema: {},
   outputSchema: {
@@ -421,9 +439,10 @@ server.registerTool("calendar_list", {
 });
 
 server.registerTool("calendar_today", {
+  title: "Today's Events",
   description: "Get all events for today. Returns pagination metadata.",
   inputSchema: {
-    calendar: z.string().optional().describe("Calendar name (default: all calendars)"),
+    calendar: z.string().max(200).optional().describe("Calendar name (default: all calendars)"),
     limit: z.number().min(1).max(500).default(200).describe("Max events to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
@@ -437,9 +456,10 @@ server.registerTool("calendar_today", {
 });
 
 server.registerTool("calendar_this_week", {
+  title: "This Week's Events",
   description: "Get all events for the next 7 days. Returns pagination metadata.",
   inputSchema: {
-    calendar: z.string().optional(),
+    calendar: z.string().max(200).optional(),
     limit: z.number().min(1).max(500).default(200).describe("Max events to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
@@ -453,11 +473,12 @@ server.registerTool("calendar_this_week", {
 });
 
 server.registerTool("calendar_get_events", {
-  description: "Get events in a date range. Returns pagination metadata.",
+  title: "Get Events by Date Range",
+  description: "Get events in a date range. Dates should be ISO 8601 format (e.g. 2026-03-08). Returns pagination metadata.",
   inputSchema: {
     startDate: z.string().describe("Start date (ISO 8601, e.g. 2026-03-08)"),
     endDate: z.string().describe("End date (ISO 8601)"),
-    calendar: z.string().optional(),
+    calendar: z.string().max(200).optional(),
     limit: z.number().min(1).max(500).default(200).describe("Max events to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
@@ -471,10 +492,11 @@ server.registerTool("calendar_get_events", {
 });
 
 server.registerTool("calendar_get_event", {
+  title: "Get Event Details",
   description: "Get full details for a specific event including attendees",
   inputSchema: {
     eventId: z.string().describe("Event ID (from calendar_today etc.)"),
-    calendar: z.string().describe("Calendar name the event belongs to"),
+    calendar: z.string().max(200).describe("Calendar name the event belongs to"),
   },
   outputSchema: EventFullZ.shape,
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -486,14 +508,15 @@ server.registerTool("calendar_get_event", {
 });
 
 server.registerTool("calendar_create_event", {
+  title: "Create Calendar Event",
   description: "Create a new calendar event",
   inputSchema: {
-    summary: z.string().describe("Event title"),
+    summary: z.string().max(1000).describe("Event title"),
     startDate: z.string().describe("Start date/time (ISO 8601)"),
     endDate: z.string().describe("End date/time (ISO 8601)"),
-    calendar: z.string().optional().describe("Calendar name (default: first calendar)"),
-    location: z.string().optional(),
-    description: z.string().optional(),
+    calendar: z.string().max(200).optional().describe("Calendar name (default: first calendar)"),
+    location: z.string().max(1000).optional(),
+    description: z.string().max(1000).optional(),
     allDay: z.boolean().default(false),
   },
   outputSchema: SuccessIdZ,
@@ -506,15 +529,16 @@ server.registerTool("calendar_create_event", {
 });
 
 server.registerTool("calendar_modify_event", {
-  description: "Modify an existing calendar event",
+  title: "Modify Calendar Event",
+  description: "Modify an existing calendar event. You can update the title (summary), start/end dates, location, and/or description. Only include the fields you want to change.",
   inputSchema: {
     eventId: z.string(),
-    calendar: z.string(),
-    summary: z.string().optional(),
+    calendar: z.string().max(200),
+    summary: z.string().max(1000).optional(),
     startDate: z.string().optional(),
     endDate: z.string().optional(),
-    location: z.string().optional(),
-    description: z.string().optional(),
+    location: z.string().max(1000).optional(),
+    description: z.string().max(1000).optional(),
   },
   outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -526,10 +550,11 @@ server.registerTool("calendar_modify_event", {
 });
 
 server.registerTool("calendar_delete_event", {
+  title: "Delete Calendar Event",
   description: "Delete a calendar event",
   inputSchema: {
     eventId: z.string(),
-    calendar: z.string(),
+    calendar: z.string().max(200),
   },
   outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
@@ -545,6 +570,7 @@ server.registerTool("calendar_delete_event", {
 // ═══════════════════════════════════════════════════════════════════
 
 server.registerTool("reminders_list_lists", {
+  title: "List Reminder Lists",
   description: "List all reminder lists",
   inputSchema: {},
   outputSchema: {
@@ -559,9 +585,10 @@ server.registerTool("reminders_list_lists", {
 });
 
 server.registerTool("reminders_get", {
+  title: "Get Reminders",
   description: "Get reminders with filtering. Default: incomplete only. Returns pagination metadata.",
   inputSchema: {
-    list: z.string().optional().describe("Reminder list name (default: all lists)"),
+    list: z.string().max(200).optional().describe("Reminder list name (default: all lists)"),
     filter: z.enum(["all", "incomplete", "completed", "due_today", "overdue", "flagged"]).default("incomplete").describe("Filter: incomplete (default), due_today, overdue, flagged, completed, all"),
     limit: z.number().min(1).max(500).default(50).describe("Max reminders to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
@@ -576,10 +603,11 @@ server.registerTool("reminders_get", {
 });
 
 server.registerTool("reminders_get_detail", {
+  title: "Get Reminder Details",
   description: "Get full details for a specific reminder",
   inputSchema: {
     reminderId: z.string(),
-    list: z.string().describe("Reminder list name"),
+    list: z.string().max(200).describe("Reminder list name"),
   },
   outputSchema: ReminderFullZ.shape,
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -591,13 +619,14 @@ server.registerTool("reminders_get_detail", {
 });
 
 server.registerTool("reminders_create", {
+  title: "Create Reminder",
   description: "Create a new reminder",
   inputSchema: {
-    name: z.string().describe("Reminder title"),
-    list: z.string().optional().describe("List name (default: default list)"),
+    name: z.string().max(1000).describe("Reminder title"),
+    list: z.string().max(200).optional().describe("List name (default: default list)"),
     dueDate: z.string().optional().describe("Due date (ISO 8601)"),
-    body: z.string().optional().describe("Notes/description"),
-    priority: z.number().optional().describe("Priority: 0=none, 1=high, 5=medium, 9=low"),
+    body: z.string().max(10000).optional().describe("Notes/description"),
+    priority: z.number().min(0).max(9).optional().describe("Priority: 0=none, 1=high, 5=medium, 9=low"),
     flagged: z.boolean().optional(),
   },
   outputSchema: SuccessIdZ,
@@ -610,10 +639,11 @@ server.registerTool("reminders_create", {
 });
 
 server.registerTool("reminders_complete", {
+  title: "Complete Reminder",
   description: "Mark a reminder as completed",
   inputSchema: {
     reminderId: z.string(),
-    list: z.string(),
+    list: z.string().max(200),
   },
   outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -625,10 +655,11 @@ server.registerTool("reminders_complete", {
 });
 
 server.registerTool("reminders_delete", {
+  title: "Delete Reminder",
   description: "Delete a reminder",
   inputSchema: {
     reminderId: z.string(),
-    list: z.string(),
+    list: z.string().max(200),
   },
   outputSchema: SuccessZ,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
@@ -644,6 +675,7 @@ server.registerTool("reminders_delete", {
 // ═══════════════════════════════════════════════════════════════════
 
 server.registerTool("daily_briefing", {
+  title: "Daily Briefing",
   description: "Get a complete daily briefing: today's calendar events, due/overdue reminders, and flagged/unread emails. Each email includes a body preview. When presenting the briefing: (1) Group emails by account. (2) Use the preview field to accurately describe each email — never guess from the subject line. (3) Call mail_get_email for any email you want to summarize in detail.",
   inputSchema: {},
   outputSchema: {
@@ -758,9 +790,10 @@ const ContactFullZ = ContactSummaryZ.extend({
 });
 
 server.registerTool("contacts_list", {
+  title: "List Contacts",
   description: "List or search contacts from the macOS Address Book. Returns pagination metadata.",
   inputSchema: {
-    query: z.string().optional().describe("Search term to filter contacts by name or organization"),
+    query: z.string().max(1000).optional().describe("Search term to filter contacts by name or organization"),
     limit: z.number().min(1).max(500).default(50).describe("Max contacts to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
   },
@@ -774,6 +807,7 @@ server.registerTool("contacts_list", {
 });
 
 server.registerTool("contacts_get", {
+  title: "Get Contact Details",
   description: "Get full details for a specific contact including all emails, phones, addresses, and notes",
   inputSchema: {
     contactId: z.string().describe("Contact unique ID (from contacts_list or contacts_search)"),
@@ -788,9 +822,10 @@ server.registerTool("contacts_get", {
 });
 
 server.registerTool("contacts_search", {
+  title: "Search Contacts",
   description: "Search contacts by name, email, phone number, or organization",
   inputSchema: {
-    query: z.string().describe("Search term"),
+    query: z.string().max(1000).describe("Search term"),
     scope: z.enum(["all", "name", "email", "phone", "organization"]).default("all").describe("Where to search: all, name, email, phone, organization"),
     limit: z.number().min(1).max(500).default(20).describe("Max results to return"),
     offset: z.number().min(0).default(0).describe("Number of results to skip for pagination"),
@@ -824,7 +859,7 @@ function resource(uri: string, fn: () => Promise<unknown>) {
         contents: [{
           uri,
           mimeType: "text/plain",
-          text: `Error: ${e instanceof Error ? e.message : String(e)}`,
+          text: `Error: ${sanitizeErrorMessage(e instanceof Error ? e.message : String(e))}`,
         }],
       };
     }
@@ -856,7 +891,7 @@ server.registerResource(
         contents: [{
           uri: uri.href,
           mimeType: "text/plain",
-          text: `Error: ${e instanceof Error ? e.message : String(e)}`,
+          text: `Error: ${sanitizeErrorMessage(e instanceof Error ? e.message : String(e))}`,
         }],
       };
     }

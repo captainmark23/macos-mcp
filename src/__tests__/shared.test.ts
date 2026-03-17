@@ -6,7 +6,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { sqlEscape, sqlLikeEscape, safeInt } from "../shared/sqlite.js";
-import { paginateArray, paginateRows } from "../shared/types.js";
+import { paginateArray, paginateRows, fromCoreDataTimestamp, sanitizeErrorMessage } from "../shared/types.js";
+import { jxaString, jxaStringArray } from "../shared/applescript.js";
+import { emlxSubpath, decodeQuotedPrintable, stripHtml } from "../mail/fts.js";
 
 // ─── sqlEscape ──────────────────────────────────────────────────
 
@@ -242,5 +244,234 @@ describe("paginateRows", () => {
       has_more: true,
       next_offset: 22,
     });
+  });
+});
+
+// ─── fromCoreDataTimestamp ────────────────────────────────────────
+
+describe("fromCoreDataTimestamp", () => {
+  it("converts a Core Data timestamp to ISO string", () => {
+    // 2024-01-01T00:00:00Z = 1704067200 Unix = 1704067200 - 978307200 = 725760000 Core Data
+    const result = fromCoreDataTimestamp(725760000);
+    assert.equal(result, "2024-01-01T00:00:00.000Z");
+  });
+
+  it("handles string input", () => {
+    const result = fromCoreDataTimestamp("725760000");
+    assert.equal(result, "2024-01-01T00:00:00.000Z");
+  });
+
+  it("returns empty string for null", () => {
+    assert.equal(fromCoreDataTimestamp(null), "");
+  });
+
+  it("returns empty string for undefined", () => {
+    assert.equal(fromCoreDataTimestamp(undefined), "");
+  });
+
+  it("returns empty string for empty string", () => {
+    assert.equal(fromCoreDataTimestamp(""), "");
+  });
+
+  it("returns empty string for NaN-producing input", () => {
+    assert.equal(fromCoreDataTimestamp("not-a-number"), "");
+  });
+
+  it("handles zero (Core Data epoch itself)", () => {
+    const result = fromCoreDataTimestamp(0);
+    assert.equal(result, "2001-01-01T00:00:00.000Z");
+  });
+
+  it("handles negative values (before 2001)", () => {
+    const result = fromCoreDataTimestamp(-86400);
+    assert.equal(result, "2000-12-31T00:00:00.000Z");
+  });
+});
+
+// ─── sanitizeErrorMessage ─────────────────────────────────────────
+
+describe("sanitizeErrorMessage", () => {
+  it("strips /Users/ paths from error messages", () => {
+    const msg = "File not found: /Users/markphillips/Library/Mail/V10/db";
+    assert.equal(sanitizeErrorMessage(msg), "File not found: [path]");
+  });
+
+  it("handles multiple paths in one message", () => {
+    const msg = "Cannot copy /Users/alice/src to /Users/bob/dst";
+    assert.equal(sanitizeErrorMessage(msg), "Cannot copy [path] to [path]");
+  });
+
+  it("leaves messages without paths unchanged", () => {
+    const msg = "Connection refused";
+    assert.equal(sanitizeErrorMessage(msg), "Connection refused");
+  });
+
+  it("handles empty string", () => {
+    assert.equal(sanitizeErrorMessage(""), "");
+  });
+
+  it("preserves non-Users absolute paths", () => {
+    const msg = "Binary at /usr/bin/sqlite3 failed";
+    assert.equal(sanitizeErrorMessage(msg), "Binary at /usr/bin/sqlite3 failed");
+  });
+});
+
+// ─── jxaString ───────────────────────────────────────────────────
+
+describe("jxaString", () => {
+  it("wraps a simple string in JSON quotes", () => {
+    assert.equal(jxaString("hello"), '"hello"');
+  });
+
+  it("escapes double quotes", () => {
+    assert.equal(jxaString('say "hi"'), '"say \\"hi\\""');
+  });
+
+  it("escapes backslashes", () => {
+    assert.equal(jxaString("path\\to"), '"path\\\\to"');
+  });
+
+  it("escapes newlines", () => {
+    assert.equal(jxaString("line1\nline2"), '"line1\\nline2"');
+  });
+
+  it("handles empty string", () => {
+    assert.equal(jxaString(""), '""');
+  });
+
+  it("handles unicode characters", () => {
+    const result = jxaString("café ☕");
+    assert.equal(JSON.parse(result), "café ☕");
+  });
+
+  it("prevents script injection via backticks", () => {
+    const malicious = '`; rm -rf /`';
+    const result = jxaString(malicious);
+    // Should be a safe JSON string, not executable
+    assert.equal(JSON.parse(result), malicious);
+  });
+});
+
+describe("jxaStringArray", () => {
+  it("serializes an array of strings", () => {
+    const result = jxaStringArray(["a", "b", "c"]);
+    assert.equal(result, '["a","b","c"]');
+  });
+
+  it("handles empty array", () => {
+    assert.equal(jxaStringArray([]), "[]");
+  });
+
+  it("escapes special characters in array elements", () => {
+    const result = jxaStringArray(['he"llo', "wor\\ld"]);
+    assert.deepEqual(JSON.parse(result), ['he"llo', "wor\\ld"]);
+  });
+});
+
+// ─── emlxSubpath ─────────────────────────────────────────────────
+
+describe("emlxSubpath", () => {
+  it("handles small ROWID (< 1000)", () => {
+    assert.equal(emlxSubpath(84), "Messages/84.emlx");
+  });
+
+  it("handles ROWID in 1000-9999 range", () => {
+    assert.equal(emlxSubpath(1243), "1/Messages/1243.emlx");
+  });
+
+  it("handles large ROWID with reversed digit nesting", () => {
+    assert.equal(emlxSubpath(548864), "8/4/5/Messages/548864.emlx");
+  });
+
+  it("handles exact 1000 boundary", () => {
+    assert.equal(emlxSubpath(1000), "1/Messages/1000.emlx");
+  });
+
+  it("handles ROWID 0", () => {
+    assert.equal(emlxSubpath(0), "Messages/0.emlx");
+  });
+
+  it("handles ROWID 999", () => {
+    assert.equal(emlxSubpath(999), "Messages/999.emlx");
+  });
+
+  it("handles 10000+", () => {
+    assert.equal(emlxSubpath(12345), "2/1/Messages/12345.emlx");
+  });
+});
+
+// ─── decodeQuotedPrintable ───────────────────────────────────────
+
+describe("decodeQuotedPrintable", () => {
+  it("decodes simple QP-encoded text", () => {
+    assert.equal(decodeQuotedPrintable("caf=C3=A9"), "café");
+  });
+
+  it("removes soft line breaks", () => {
+    assert.equal(decodeQuotedPrintable("hello=\nworld"), "helloworld");
+  });
+
+  it("removes soft line breaks with \\r\\n", () => {
+    assert.equal(decodeQuotedPrintable("hello=\r\nworld"), "helloworld");
+  });
+
+  it("passes plain text through unchanged", () => {
+    assert.equal(decodeQuotedPrintable("hello world"), "hello world");
+  });
+
+  it("handles empty string", () => {
+    assert.equal(decodeQuotedPrintable(""), "");
+  });
+
+  it("decodes multiple encoded characters", () => {
+    assert.equal(decodeQuotedPrintable("=C3=BC=C3=B6=C3=A4"), "üöä");
+  });
+
+  it("handles mixed plain and encoded text", () => {
+    assert.equal(decodeQuotedPrintable("Hello =C3=A9 World"), "Hello é World");
+  });
+});
+
+// ─── stripHtml ───────────────────────────────────────────────────
+
+describe("stripHtml", () => {
+  it("removes HTML tags", () => {
+    assert.equal(stripHtml("<p>Hello</p>"), "Hello");
+  });
+
+  it("removes style blocks", () => {
+    const input = "<style>.foo { color: red; }</style>Hello";
+    assert.equal(stripHtml(input), "Hello");
+  });
+
+  it("removes script blocks", () => {
+    const input = "<script>alert('xss')</script>Hello";
+    assert.equal(stripHtml(input), "Hello");
+  });
+
+  it("decodes common HTML entities", () => {
+    assert.equal(stripHtml("&amp; &lt; &gt; &quot; &#39;"), '& < > " \'');
+  });
+
+  it("decodes numeric entities", () => {
+    assert.equal(stripHtml("&#65;&#66;"), "AB");
+  });
+
+  it("replaces block elements with newlines", () => {
+    const result = stripHtml("<p>One</p><p>Two</p>");
+    assert.ok(result.includes("One"));
+    assert.ok(result.includes("Two"));
+  });
+
+  it("handles empty string", () => {
+    assert.equal(stripHtml(""), "");
+  });
+
+  it("passes plain text through", () => {
+    assert.equal(stripHtml("no html here"), "no html here");
+  });
+
+  it("handles nested tags", () => {
+    assert.equal(stripHtml("<div><span><b>text</b></span></div>").trim(), "text");
   });
 });

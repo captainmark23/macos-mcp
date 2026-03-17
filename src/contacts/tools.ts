@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { sqliteQuery, sqlEscape, sqlLikeEscape, safeInt } from "../shared/sqlite.js";
-import { PaginatedResult, paginateRows } from "../shared/types.js";
+import { PaginatedResult, paginateRows, fromCoreDataTimestamp } from "../shared/types.js";
 
 // ─── Database Detection ──────────────────────────────────────────
 
@@ -125,18 +125,6 @@ function parseLabel(raw: string | null): string {
   if (!raw) return "";
   const match = raw.match(/_\$!<(.+?)>!\$_/);
   return match ? match[1] : raw;
-}
-
-/**
- * Convert a Core Data timestamp to ISO string.
- * AddressBook uses Unix timestamps (not Core Data epoch like Calendar).
- */
-function fromTimestamp(ts: number | string | null | undefined): string {
-  if (ts == null || ts === "") return "";
-  const n = typeof ts === "string" ? parseFloat(ts) : ts;
-  if (isNaN(n)) return "";
-  // AddressBook uses Core Data epoch (2001-01-01)
-  return new Date((n + 978307200) * 1000).toISOString();
 }
 
 // ─── Read Tools (SQLite — instant) ──────────────────────────────
@@ -269,7 +257,7 @@ export async function getContact(contactId: string): Promise<ContactFull> {
     nickname: String(r.ZNICKNAME || ""),
     title: String(r.ZTITLE || ""),
     suffix: String(r.ZSUFFIX || ""),
-    birthday: fromTimestamp(r.ZBIRTHDAY),
+    birthday: fromCoreDataTimestamp(r.ZBIRTHDAY),
     email: emails[0]?.address || "",
     phone: phones[0]?.number || "",
     emails,

@@ -1,6 +1,31 @@
 /**
- * Shared types used across mail, calendar, and reminders modules.
+ * Shared types and utilities used across mail, calendar, and reminders modules.
  */
+
+/**
+ * Core Data epoch offset (seconds between Unix epoch 1970-01-01 and Core Data epoch 2001-01-01).
+ * Used by Calendar, Reminders, and Contacts databases.
+ */
+export const CORE_DATA_EPOCH_OFFSET = 978307200;
+
+/**
+ * Convert a Core Data timestamp to ISO 8601 string.
+ * Handles null, empty, NaN, and both number/string inputs.
+ */
+export function fromCoreDataTimestamp(ts: number | string | null | undefined): string {
+  if (ts == null || ts === "") return "";
+  const n = typeof ts === "string" ? parseFloat(ts) : ts;
+  if (isNaN(n)) return "";
+  return new Date((n + CORE_DATA_EPOCH_OFFSET) * 1000).toISOString();
+}
+
+/**
+ * Sanitize error messages to strip filesystem paths before returning to MCP clients.
+ * Replaces `/Users/...` segments with `[path]` to prevent leaking system info.
+ */
+export function sanitizeErrorMessage(msg: string): string {
+  return msg.replace(/\/Users\/[^\s:'"]+/g, "[path]");
+}
 
 /** Standard paginated response envelope for list/search tools. */
 export interface PaginatedResult<T> {

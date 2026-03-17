@@ -14,9 +14,8 @@ import { readdirSync, statSync } from "node:fs";
 import { executeJxa, executeJxaWrite, jxaString } from "../shared/applescript.js";
 import { sqliteQuery, sqlEscape, safeInt } from "../shared/sqlite.js";
 import { getReminderLists } from "../shared/config.js";
-import { PaginatedResult, paginateRows } from "../shared/types.js";
+import { PaginatedResult, paginateRows, CORE_DATA_EPOCH_OFFSET, fromCoreDataTimestamp } from "../shared/types.js";
 
-const CORE_DATA_EPOCH_OFFSET = 978307200;
 const REMINDER_ID_PREFIX = "x-apple-reminder://";
 
 /**
@@ -61,14 +60,6 @@ let _remindersDb: string | null = null;
 function getRemindersDb(): string {
   if (!_remindersDb) _remindersDb = findRemindersDb();
   return _remindersDb;
-}
-
-/** Convert a Core Data timestamp to ISO string. */
-function fromCoreDataTimestamp(ts: number | string | null | undefined): string {
-  if (ts == null || ts === "") return "";
-  const n = typeof ts === "string" ? parseFloat(ts) : ts;
-  if (isNaN(n)) return "";
-  return new Date((n + CORE_DATA_EPOCH_OFFSET) * 1000).toISOString();
 }
 
 /** Build SQL WHERE clause for configured reminder lists. */
