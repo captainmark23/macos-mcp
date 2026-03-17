@@ -3,7 +3,7 @@
  *
  * MACOS_MCP_CALENDARS: Comma-separated list of calendar names to include.
  *   If not set, all calendars are queried (can be slow with many calendars).
- *   Example: "Mark Work,Mark Personal,Family"
+ *   Example: "My Calendar,Shared Calendar,Team Calendar"
  *
  * MACOS_MCP_MAIL_ACCOUNT: Default mail account name.
  * MACOS_MCP_REMINDER_LISTS: Comma-separated list of reminder lists to include.

@@ -52,8 +52,8 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
       "command": "node",
       "args": ["/path/to/macos-mcp/build/index.js"],
       "env": {
-        "MACOS_MCP_CALENDARS": "Work,Personal",
-        "MACOS_MCP_MAIL_ACCOUNT": "iCloud"
+        "MACOS_MCP_CALENDARS": "My Calendar,Shared Calendar",
+        "MACOS_MCP_MAIL_ACCOUNT": "MyAccount"
       }
     }
   }
