@@ -292,7 +292,7 @@ describe("fromCoreDataTimestamp", () => {
 
 describe("sanitizeErrorMessage", () => {
   it("strips /Users/ paths from error messages", () => {
-    const msg = "File not found: /Users/markphillips/Library/Mail/V10/db";
+    const msg = "File not found: /Users/someone/Library/Mail/V10/db";
     assert.equal(sanitizeErrorMessage(msg), "File not found: [path]");
   });
 
