@@ -482,14 +482,14 @@ export async function getEmail(
       db,
       `SELECT a.address
        FROM recipients rc
-       JOIN addresses a ON rc.address_id = a.ROWID
+       JOIN addresses a ON rc.address = a.ROWID
        WHERE rc.message = ${safeInt(messageId)} AND rc.type = 0;`
     ),
     sqliteQuery(
       db,
       `SELECT a.address
        FROM recipients rc
-       JOIN addresses a ON rc.address_id = a.ROWID
+       JOIN addresses a ON rc.address = a.ROWID
        WHERE rc.message = ${safeInt(messageId)} AND rc.type = 1;`
     ),
   ]);
