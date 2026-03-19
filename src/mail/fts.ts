@@ -16,7 +16,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, readdirSync, statSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFile as execFileCb } from "node:child_process";
 import { sqliteQuery, sqlLikeEscape, safeInt } from "../shared/sqlite.js";
 import { getMailDbPath, getMailDir, resolveMailAccountUuid, getDefaultMailAccount } from "../shared/config.js";
 import { PaginatedResult, paginateRows } from "../shared/types.js";
@@ -24,6 +24,9 @@ import { PaginatedResult, paginateRows } from "../shared/types.js";
 const FTS_DIR = join(homedir(), ".macos-mcp");
 const FTS_DB = join(FTS_DIR, "mail-fts.db");
 const SQLITE3 = "/usr/bin/sqlite3";
+
+/** Maximum .emlx file size to read (50 MB). Larger files are skipped to prevent OOM. */
+const MAX_EMLX_SIZE = 50 * 1024 * 1024;
 
 
 // ─── .emlx Path Resolution ──────────────────────────────────────
@@ -97,6 +100,14 @@ export function resolveEmlxPath(rowid: number, mailboxUrl: string): string | nul
  * Format: first line is byte count, then RFC 822 email, then Apple plist metadata.
  */
 export function parseEmlxBody(filePath: string): string {
+  try {
+    const st = statSync(filePath);
+    if (st.size > MAX_EMLX_SIZE) {
+      return "(File too large to process)";
+    }
+  } catch {
+    /* file may not exist — let readFileSync throw below */
+  }
   const buf = readFileSync(filePath);
 
   // First line is the byte count of the email portion
@@ -193,26 +204,35 @@ function cleanBodyForIndex(raw: string): string {
 // ─── FTS5 Index Management ──────────────────────────────────────
 
 /** Run a SQL command against the FTS database via stdin (avoids E2BIG for large SQL). */
-function ftsExec(sql: string): void {
+async function ftsExec(sql: string): Promise<void> {
   // Enable WAL mode and busy timeout to prevent "database is locked" errors
   // during background indexing of large mailboxes.
   const preamble = "PRAGMA journal_mode=WAL;\nPRAGMA busy_timeout=5000;\n";
-  execFileSync(SQLITE3, [FTS_DB], {
-    input: preamble + sql,
-    timeout: 120_000,
-    maxBuffer: 10 * 1024 * 1024,
+  const input = preamble + sql;
+
+  return new Promise<void>((resolve, reject) => {
+    const child = execFileCb(
+      SQLITE3,
+      [FTS_DB],
+      { timeout: 120_000, maxBuffer: 10 * 1024 * 1024 },
+      (error) => {
+        if (error) reject(error);
+        else resolve();
+      }
+    );
+    child.stdin?.end(input);
   });
 }
 
 /** Ensure the FTS database and tables exist. */
-function ensureFtsDb(): void {
+async function ensureFtsDb(): Promise<void> {
   if (!existsSync(FTS_DIR)) {
     mkdirSync(FTS_DIR, { recursive: true });
   }
 
   // Check size > 0 to handle corrupted/empty DB files from prior failed attempts
   if (!existsSync(FTS_DB) || statSync(FTS_DB).size === 0) {
-    ftsExec(`
+    await ftsExec(`
       PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS email_content (
         rowid INTEGER PRIMARY KEY,
@@ -243,7 +263,7 @@ function ensureFtsDb(): void {
  * Get the highest ROWID we've indexed so far.
  */
 async function getLastIndexedRowid(): Promise<number> {
-  ensureFtsDb();
+  await ensureFtsDb();
   const rows = await sqliteQuery(
     FTS_DB,
     `SELECT COALESCE(MAX(rowid), 0) as max_id FROM email_content;`
@@ -266,7 +286,7 @@ export async function indexNewMessages(
   skipped: number;
   total: number;
 }> {
-  ensureFtsDb();
+  await ensureFtsDb();
   const lastRowid = await getLastIndexedRowid();
 
   // Get new messages from Envelope Index
@@ -320,7 +340,7 @@ export async function indexNewMessages(
     }
 
     if (inserts.length > 0) {
-      ftsExec(inserts.join("\n"));
+      await ftsExec(inserts.join("\n"));
     }
 
     if (onProgress) {
@@ -355,7 +375,7 @@ export async function rebuildIndex(
     try { unlinkSync(FTS_DB + "-wal"); } catch {}
     try { unlinkSync(FTS_DB + "-shm"); } catch {}
   }
-  ensureFtsDb();
+  await ensureFtsDb();
 
   // Get total message count
   const countRows = await sqliteQuery(
@@ -431,7 +451,7 @@ export async function searchBody(
   limit = 20,
   offset = 0
 ): Promise<PaginatedResult<FtsSearchResult>> {
-  ensureFtsDb();
+  await ensureFtsDb();
 
   const mbFilter = await ftsMailboxFilter(mailbox, account);
 
@@ -520,7 +540,7 @@ export async function getIndexStats(): Promise<{
   lastIndexedRowid: number;
   dbSizeMb: number;
 }> {
-  ensureFtsDb();
+  await ensureFtsDb();
 
   const [indexedRows, totalRows, lastRows] = await Promise.all([
     sqliteQuery(FTS_DB, `SELECT COUNT(*) as cnt FROM email_content WHERE body != '';`),

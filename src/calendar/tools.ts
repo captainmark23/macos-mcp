@@ -307,7 +307,7 @@ export async function createEvent(
       summary: ${jxaString(summary)},
       startDate: new Date(${jxaString(startDate)}),
       endDate: new Date(${jxaString(endDate)}),
-      alldayEvent: ${allDay}
+      alldayEvent: ${Boolean(allDay)}
     };
     ${location ? `props.location = ${jxaString(location)};` : ""}
     ${description ? `props.description = ${jxaString(description)};` : ""}

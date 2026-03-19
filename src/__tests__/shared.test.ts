@@ -314,6 +314,36 @@ describe("sanitizeErrorMessage", () => {
     const msg = "Binary at /usr/bin/sqlite3 failed";
     assert.equal(sanitizeErrorMessage(msg), "Binary at /usr/bin/sqlite3 failed");
   });
+
+  it("strips /private/var paths", () => {
+    const msg = "Error reading /private/var/folders/xx/cache/data.db";
+    assert.equal(sanitizeErrorMessage(msg), "Error reading [path]");
+  });
+
+  it("strips /private/tmp paths", () => {
+    const msg = "Cannot open /private/tmp/macos-mcp/test.db";
+    assert.equal(sanitizeErrorMessage(msg), "Cannot open [path]");
+  });
+
+  it("strips /tmp paths", () => {
+    const msg = "File missing: /tmp/macos-mcp-fix/build/index.js";
+    assert.equal(sanitizeErrorMessage(msg), "File missing: [path]");
+  });
+
+  it("strips /Library paths", () => {
+    const msg = "DB locked: /Library/Mail/V10/envelope.db";
+    assert.equal(sanitizeErrorMessage(msg), "DB locked: [path]");
+  });
+
+  it("strips /var paths", () => {
+    const msg = "Permission denied: /var/log/system.log";
+    assert.equal(sanitizeErrorMessage(msg), "Permission denied: [path]");
+  });
+
+  it("strips mixed path types in one message", () => {
+    const msg = "Copy /Users/alice/file to /tmp/dest and /private/var/cache";
+    assert.equal(sanitizeErrorMessage(msg), "Copy [path] to [path] and [path]");
+  });
 });
 
 // ─── jxaString ───────────────────────────────────────────────────

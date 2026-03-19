@@ -260,8 +260,8 @@ export async function createReminder(
 
   const props: string[] = [`name: ${jxaString(name)}`];
   if (body !== undefined) props.push(`body: ${jxaString(body)}`);
-  if (priority !== undefined) props.push(`priority: ${priority}`);
-  if (flagged !== undefined) props.push(`flagged: ${flagged}`);
+  if (priority !== undefined) props.push(`priority: ${safeInt(priority)}`);
+  if (flagged !== undefined) props.push(`flagged: ${Boolean(flagged)}`);
 
   return executeJxaWrite(`
     const Rem = Application("Reminders");

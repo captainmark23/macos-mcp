@@ -21,10 +21,15 @@ export function fromCoreDataTimestamp(ts: number | string | null | undefined): s
 
 /**
  * Sanitize error messages to strip filesystem paths before returning to MCP clients.
- * Replaces `/Users/...` segments with `[path]` to prevent leaking system info.
+ * Replaces common macOS filesystem paths with `[path]` to prevent leaking system info.
  */
 export function sanitizeErrorMessage(msg: string): string {
-  return msg.replace(/\/Users\/[^\s:'"]+/g, "[path]");
+  return msg
+    .replace(/\/Users\/[^\s:'"]+/g, "[path]")
+    .replace(/\/private\/[^\s:'"]+/g, "[path]")
+    .replace(/\/Library\/[^\s:'"]+/g, "[path]")
+    .replace(/\/var\/[^\s:'"]+/g, "[path]")
+    .replace(/\/tmp\/[^\s:'"]+/g, "[path]");
 }
 
 /** Standard paginated response envelope for list/search tools. */

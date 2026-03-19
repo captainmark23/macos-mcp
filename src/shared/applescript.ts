@@ -86,7 +86,8 @@ export function jxaStringArray(values: string[]): string {
 
 // ─── Write Rate Limiter ──────────────────────────────────────────
 
-const WRITE_RATE_LIMIT = parseInt(process.env.MACOS_MCP_WRITE_RATE_LIMIT || "10", 10);
+const _parsedRateLimit = parseInt(process.env.MACOS_MCP_WRITE_RATE_LIMIT || "10", 10);
+const WRITE_RATE_LIMIT = Number.isFinite(_parsedRateLimit) ? Math.max(1, Math.min(1000, _parsedRateLimit)) : 10;
 const WRITE_RATE_WINDOW_MS = 60_000; // 1 minute sliding window
 const _writeTimestamps: number[] = [];
 

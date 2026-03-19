@@ -10,7 +10,10 @@
  * move_message, flag_message, mark_read
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+
+/** Maximum .emlx file size to read (50 MB). Larger files are skipped to prevent OOM. */
+const MAX_EMLX_SIZE = 50 * 1024 * 1024;
 import { executeJxa, executeJxaWrite, jxaString } from "../shared/applescript.js";
 import { sqliteQuery, sqlEscape, sqlLikeEscape, safeInt } from "../shared/sqlite.js";
 import {
@@ -64,6 +67,10 @@ function parseMailboxUrl(url: string): { accountId: string; mailboxName: string 
 /** Extract key headers (Message-ID, Reply-To) from an .emlx file. */
 function parseEmlxHeaders(filePath: string): { messageId: string; replyTo: string } {
   try {
+    const st = statSync(filePath);
+    if (st.size > MAX_EMLX_SIZE) {
+      return { messageId: "", replyTo: "" };
+    }
     const buf = readFileSync(filePath);
     const firstNewline = buf.indexOf(0x0a);
     if (firstNewline === -1) return { messageId: "", replyTo: "" };
@@ -228,6 +235,10 @@ function parseAttachmentHeaders(
     const emlxPath = resolveEmlxPath(messageId, mailboxUrl);
     if (!emlxPath) return [];
 
+    const st = statSync(emlxPath);
+    if (st.size > MAX_EMLX_SIZE) {
+      return [];
+    }
     const buf = readFileSync(emlxPath);
     const firstNewline = buf.indexOf(0x0a);
     if (firstNewline === -1) return [];
@@ -732,7 +743,7 @@ export async function replyTo(
     const idx = ids.indexOf(${safeInt(messageId)});
     if (idx === -1) throw new Error("Message not found");
     const msg = mb.messages[idx];
-    const reply = msg.reply({ replyToAll: ${replyAll}, openingWindow: ${!send} });
+    const reply = msg.reply({ replyToAll: ${Boolean(replyAll)}, openingWindow: ${!Boolean(send)} });
     if (reply) {
       reply.content = ${jxaString(body)} + "\\n\\n" + reply.content();
       ${send ? "reply.send();" : ""}
@@ -768,7 +779,7 @@ export async function forwardMessage(
     const idx = ids.indexOf(${safeInt(messageId)});
     if (idx === -1) throw new Error("Message not found");
     const msg = mb.messages[idx];
-    const fwd = msg.forward({ openingWindow: ${!send} });
+    const fwd = msg.forward({ openingWindow: ${!Boolean(send)} });
     if (fwd) {
       for (const addr of JSON.parse(${jxaString(JSON.stringify(to))})) {
         const r = Mail.ToRecipient({ address: addr });
@@ -827,8 +838,8 @@ export async function setMessageFlags(
   const acctSetup = `const acct = Mail.accounts.byName(${jxaString(account)});`;
 
   const flagOps: string[] = [];
-  if (flagged !== undefined) flagOps.push(`m.flaggedStatus = ${flagged};`);
-  if (read !== undefined) flagOps.push(`m.readStatus = ${read};`);
+  if (flagged !== undefined) flagOps.push(`m.flaggedStatus = ${Boolean(flagged)};`);
+  if (read !== undefined) flagOps.push(`m.readStatus = ${Boolean(read)};`);
 
   return executeJxaWrite(`
     const Mail = Application("Mail");

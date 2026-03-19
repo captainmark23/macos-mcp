@@ -61,7 +61,7 @@ function log(message: string): void {
 
 const server = new McpServer({
   name: "macos-mcp-server",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 import { sanitizeErrorMessage } from "./shared/types.js";
