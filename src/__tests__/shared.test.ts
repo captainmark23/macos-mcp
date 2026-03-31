@@ -10,6 +10,10 @@ import { paginateArray, paginateRows, fromCoreDataTimestamp, sanitizeErrorMessag
 import { isReadOnly } from "../shared/config.js";
 import { jxaString, jxaStringArray } from "../shared/applescript.js";
 import { emlxSubpath, decodeQuotedPrintable, stripHtml } from "../mail/fts.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerMailTools } from "../mail/register.js";
+import { registerCalendarTools } from "../calendar/register.js";
+import { registerRemindersTools } from "../reminders/register.js";
 
 // ─── sqlEscape ──────────────────────────────────────────────────
 
@@ -553,5 +557,133 @@ describe("isReadOnly", () => {
   it("returns false when env var is empty string", () => {
     process.env.MACOS_MCP_READONLY = "";
     assert.equal(isReadOnly(), false);
+  });
+});
+
+// ─── Read-only integration: tool registration ────────────────────
+
+const MAIL_WRITE_TOOLS = ["mail_send", "mail_create_draft", "mail_reply", "mail_forward", "mail_move", "mail_set_flags"];
+const CALENDAR_WRITE_TOOLS = ["calendar_create_event", "calendar_modify_event", "calendar_delete_event"];
+const REMINDERS_WRITE_TOOLS = ["reminders_create", "reminders_complete", "reminders_delete"];
+
+function makeMockServer(): { server: McpServer; registeredTools: () => string[] } {
+  const names: string[] = [];
+  const server = {
+    registerTool: (name: string, ..._rest: unknown[]) => { names.push(name); },
+  } as unknown as McpServer;
+  return { server, registeredTools: () => names };
+}
+
+describe("read-only integration: registerMailTools", () => {
+  const originalEnv = process.env.MACOS_MCP_READONLY;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.MACOS_MCP_READONLY;
+    } else {
+      process.env.MACOS_MCP_READONLY = originalEnv;
+    }
+  });
+
+  it("omits all 6 write tools when MACOS_MCP_READONLY=true", () => {
+    process.env.MACOS_MCP_READONLY = "true";
+    const { server, registeredTools } = makeMockServer();
+    registerMailTools(server);
+    for (const tool of MAIL_WRITE_TOOLS) {
+      assert.ok(!registeredTools().includes(tool), `Expected ${tool} to be absent in read-only mode`);
+    }
+  });
+
+  it("includes all 6 write tools when MACOS_MCP_READONLY is not set", () => {
+    delete process.env.MACOS_MCP_READONLY;
+    const { server, registeredTools } = makeMockServer();
+    registerMailTools(server);
+    for (const tool of MAIL_WRITE_TOOLS) {
+      assert.ok(registeredTools().includes(tool), `Expected ${tool} to be present in normal mode`);
+    }
+  });
+
+  it("still registers read-only tools regardless of MACOS_MCP_READONLY", () => {
+    process.env.MACOS_MCP_READONLY = "true";
+    const { server, registeredTools } = makeMockServer();
+    registerMailTools(server);
+    assert.ok(registeredTools().includes("mail_get_emails"));
+    assert.ok(registeredTools().includes("mail_search"));
+  });
+});
+
+describe("read-only integration: registerCalendarTools", () => {
+  const originalEnv = process.env.MACOS_MCP_READONLY;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.MACOS_MCP_READONLY;
+    } else {
+      process.env.MACOS_MCP_READONLY = originalEnv;
+    }
+  });
+
+  it("omits all 3 write tools when MACOS_MCP_READONLY=true", () => {
+    process.env.MACOS_MCP_READONLY = "true";
+    const { server, registeredTools } = makeMockServer();
+    registerCalendarTools(server);
+    for (const tool of CALENDAR_WRITE_TOOLS) {
+      assert.ok(!registeredTools().includes(tool), `Expected ${tool} to be absent in read-only mode`);
+    }
+  });
+
+  it("includes all 3 write tools when MACOS_MCP_READONLY is not set", () => {
+    delete process.env.MACOS_MCP_READONLY;
+    const { server, registeredTools } = makeMockServer();
+    registerCalendarTools(server);
+    for (const tool of CALENDAR_WRITE_TOOLS) {
+      assert.ok(registeredTools().includes(tool), `Expected ${tool} to be present in normal mode`);
+    }
+  });
+
+  it("still registers read-only tools regardless of MACOS_MCP_READONLY", () => {
+    process.env.MACOS_MCP_READONLY = "true";
+    const { server, registeredTools } = makeMockServer();
+    registerCalendarTools(server);
+    assert.ok(registeredTools().includes("calendar_today"));
+    assert.ok(registeredTools().includes("calendar_get_events"));
+  });
+});
+
+describe("read-only integration: registerRemindersTools", () => {
+  const originalEnv = process.env.MACOS_MCP_READONLY;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.MACOS_MCP_READONLY;
+    } else {
+      process.env.MACOS_MCP_READONLY = originalEnv;
+    }
+  });
+
+  it("omits all 3 write tools when MACOS_MCP_READONLY=true", () => {
+    process.env.MACOS_MCP_READONLY = "true";
+    const { server, registeredTools } = makeMockServer();
+    registerRemindersTools(server);
+    for (const tool of REMINDERS_WRITE_TOOLS) {
+      assert.ok(!registeredTools().includes(tool), `Expected ${tool} to be absent in read-only mode`);
+    }
+  });
+
+  it("includes all 3 write tools when MACOS_MCP_READONLY is not set", () => {
+    delete process.env.MACOS_MCP_READONLY;
+    const { server, registeredTools } = makeMockServer();
+    registerRemindersTools(server);
+    for (const tool of REMINDERS_WRITE_TOOLS) {
+      assert.ok(registeredTools().includes(tool), `Expected ${tool} to be present in normal mode`);
+    }
+  });
+
+  it("still registers read-only tools regardless of MACOS_MCP_READONLY", () => {
+    process.env.MACOS_MCP_READONLY = "true";
+    const { server, registeredTools } = makeMockServer();
+    registerRemindersTools(server);
+    assert.ok(registeredTools().includes("reminders_get"));
+    assert.ok(registeredTools().includes("reminders_list_lists"));
   });
 });
