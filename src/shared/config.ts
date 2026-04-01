@@ -7,6 +7,9 @@
  *
  * MACOS_MCP_MAIL_ACCOUNT: Default mail account name.
  * MACOS_MCP_REMINDER_LISTS: Comma-separated list of reminder lists to include.
+ * MACOS_MCP_ALLOWED_RECIPIENTS: Comma-separated list of allowed recipient patterns for mail_send.
+ *   Supports wildcard (*) matching. If set, any recipient not matching causes an error.
+ *   Example: "*@yourcompany.com,trusted@example.com"
  */
 
 import { homedir } from "node:os";
@@ -34,6 +37,63 @@ export function getReminderLists(): string[] | null {
 export function isReadOnly(): boolean {
   const val = process.env.MACOS_MCP_READONLY;
   return val === "true" || val === "1";
+}
+
+/**
+ * When true, mail_send saves to Mail.app drafts instead of sending.
+ * Controlled by MACOS_MCP_SEND_AS_DRAFT=true|1.
+ */
+export function isSendAsDraft(): boolean {
+  const val = process.env.MACOS_MCP_SEND_AS_DRAFT;
+  return val === "true" || val === "1";
+}
+
+/**
+ * When true, email body content is sanitized before returning to the LLM client.
+ * Controlled by MACOS_MCP_SANITIZE_BODIES=true|1.
+ */
+export function isSanitizeBodies(): boolean {
+  const val = process.env.MACOS_MCP_SANITIZE_BODIES;
+  return val === "true" || val === "1";
+}
+
+// ─── Recipient Allowlist ─────────────────────────────────────────
+
+/**
+ * Returns the list of allowed recipient patterns from MACOS_MCP_ALLOWED_RECIPIENTS,
+ * or null if the env var is not set (meaning all recipients are allowed).
+ */
+export function getAllowedRecipients(): string[] | null {
+  const val = process.env.MACOS_MCP_ALLOWED_RECIPIENTS;
+  if (!val) return null;
+  return val.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+/**
+ * Returns true if the given email address matches at least one pattern in the allowlist.
+ * Patterns support a single leading wildcard: `*@domain.com`.
+ * Matching is case-insensitive.
+ */
+export function matchesAllowlist(address: string, patterns: string[]): boolean {
+  const addr = address.trim().toLowerCase();
+  return patterns.some((pattern) => {
+    if (pattern.includes("*")) {
+      // Escape all regex metacharacters except *, then replace * with .*
+      const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+      return new RegExp(`^${escaped}$`).test(addr);
+    }
+    return addr === pattern;
+  });
+}
+
+/**
+ * Validates a list of recipient addresses against the allowlist.
+ * Returns the first rejected address, or null if all pass (or no allowlist is set).
+ */
+export function findBlockedRecipient(addresses: string[]): string | null {
+  const patterns = getAllowedRecipients();
+  if (!patterns) return null;
+  return addresses.find((addr) => !matchesAllowlist(addr, patterns)) ?? null;
 }
 
 // ─── Mail DB Auto-Detection ──────────────────────────────────────
