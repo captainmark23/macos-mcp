@@ -210,11 +210,14 @@ describe("Notes tool registration", () => {
 
 // ═══════════════════════════════════════════════════════════════════
 // INTEGRATION TESTS — require macOS + Notes.app database
+// Skipped in CI (JXA needs a running Notes.app with GUI session)
 // ═══════════════════════════════════════════════════════════════════
 
 import * as notes from "../notes/tools.js";
 
-describe("Notes integration: listAccounts", () => {
+const isCI = !!process.env.CI;
+
+describe("Notes integration: listAccounts", { skip: isCI }, () => {
   it("returns at least one account", async () => {
     const accounts = await notes.listAccounts();
     assert.ok(Array.isArray(accounts));
@@ -226,7 +229,7 @@ describe("Notes integration: listAccounts", () => {
   });
 });
 
-describe("Notes integration: listFolders", () => {
+describe("Notes integration: listFolders", { skip: isCI }, () => {
   it("returns folders with note counts", async () => {
     const folders = await notes.listFolders();
     assert.ok(Array.isArray(folders));
@@ -265,7 +268,7 @@ describe("Notes integration: listFolders", () => {
   });
 });
 
-describe("Notes integration: listNotes", () => {
+describe("Notes integration: listNotes", { skip: isCI }, () => {
   it("returns paginated notes sorted by modification date", async () => {
     const result = await notes.listNotes(undefined, undefined, "all", "modified", 5, 0);
     assert.ok(result.total >= 0);
@@ -341,7 +344,7 @@ describe("Notes integration: listNotes", () => {
   });
 });
 
-describe("Notes integration: searchNotes", () => {
+describe("Notes integration: searchNotes", { skip: isCI }, () => {
   it("finds notes matching a title keyword", async () => {
     // Get a real note title to search for
     const all = await notes.listNotes(undefined, undefined, "all", "modified", 1, 0);
@@ -381,7 +384,7 @@ describe("Notes integration: searchNotes", () => {
   });
 });
 
-describe("Notes integration: getNote", () => {
+describe("Notes integration: getNote", { skip: isCI }, () => {
   it("returns full note with plaintext body", async () => {
     const all = await notes.listNotes(undefined, undefined, "all", "modified", 1, 0);
     if (all.items.length > 0 && !all.items[0].isLocked) {
@@ -413,7 +416,7 @@ describe("Notes integration: getNote", () => {
   });
 });
 
-describe("Notes integration: CRUD lifecycle", () => {
+describe("Notes integration: CRUD lifecycle", { skip: isCI }, () => {
   const testTitle = `MCP Unit Test Note ${Date.now()}`;
   let sqliteId: string | null = null;
 
@@ -502,7 +505,7 @@ describe("Notes integration: CRUD lifecycle", () => {
   });
 });
 
-describe("Notes integration: multi-account support", () => {
+describe("Notes integration: multi-account support", { skip: isCI }, () => {
   it("listAccounts returns all accounts including non-iCloud", async () => {
     const accounts = await notes.listAccounts();
     assert.ok(accounts.length > 0);
@@ -578,7 +581,7 @@ describe("Notes integration: multi-account support", () => {
   });
 });
 
-describe("Notes integration: getNotesModifiedToday", () => {
+describe("Notes integration: getNotesModifiedToday", { skip: isCI }, () => {
   it("returns paginated result (may be empty)", async () => {
     const result = await notes.getNotesModifiedToday(5);
     assert.ok(typeof result.total === "number");
