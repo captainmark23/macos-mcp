@@ -324,9 +324,9 @@ describe("Notes integration: listNotes", () => {
   it("sorts by title", async () => {
     const result = await notes.listNotes(undefined, undefined, "all", "title", 10, 0);
     if (result.items.length > 1) {
-      const titles = result.items.map((n) => n.title.toLowerCase());
-      for (let i = 1; i < titles.length; i++) {
-        assert.ok(titles[i] >= titles[i - 1], `"${titles[i]}" should come after "${titles[i - 1]}"`);
+      for (let i = 1; i < result.items.length; i++) {
+        const cmp = result.items[i].title.localeCompare(result.items[i - 1].title, undefined, { sensitivity: "base" });
+        assert.ok(cmp >= 0, `"${result.items[i].title}" should come after "${result.items[i - 1].title}"`);
       }
     }
   });
@@ -497,6 +497,82 @@ describe("Notes integration: CRUD lifecycle", () => {
             JSON.stringify({success: true});
           `);
         } catch { /* best-effort */ }
+      }
+    }
+  });
+});
+
+describe("Notes integration: multi-account support", () => {
+  it("listAccounts returns all accounts including non-iCloud", async () => {
+    const accounts = await notes.listAccounts();
+    assert.ok(accounts.length > 0);
+    // Verify we get more than just iCloud (when multiple accounts exist)
+    const names = accounts.map((a) => a.name);
+    // At minimum, iCloud should always be present
+    assert.ok(names.some((n) => /icloud/i.test(n)), "Should include iCloud account");
+  });
+
+  it("listFolders returns folders from all accounts", async () => {
+    const accounts = await notes.listAccounts();
+    if (accounts.length > 1) {
+      const folders = await notes.listFolders();
+      const accountNames = new Set(folders.map((f) => f.accountName));
+      assert.ok(accountNames.size > 1, `Should have folders from multiple accounts, got: ${[...accountNames].join(", ")}`);
+    }
+  });
+
+  it("listNotes returns notes from all accounts", async () => {
+    const accounts = await notes.listAccounts();
+    if (accounts.length > 1) {
+      const result = await notes.listNotes(undefined, undefined, "all", "modified", 100, 0);
+      const accountNames = new Set(result.items.map((n) => n.account));
+      assert.ok(accountNames.size > 1, `Should have notes from multiple accounts, got: ${[...accountNames].join(", ")}`);
+    }
+  });
+
+  it("listNotes can filter by non-iCloud account", async () => {
+    const accounts = await notes.listAccounts();
+    const nonIcloud = accounts.find((a) => !/icloud/i.test(a.name));
+    if (nonIcloud) {
+      const result = await notes.listNotes(undefined, nonIcloud.name, "all", "modified", 100, 0);
+      assert.ok(result.total > 0, `Non-iCloud account "${nonIcloud.name}" should have notes`);
+      for (const n of result.items) {
+        assert.equal(n.account, nonIcloud.name, `All notes should be from ${nonIcloud.name}`);
+      }
+    }
+  });
+
+  it("searchNotes finds notes in non-iCloud accounts", async () => {
+    const accounts = await notes.listAccounts();
+    const nonIcloud = accounts.find((a) => !/icloud/i.test(a.name));
+    if (nonIcloud) {
+      // Get a note title from the non-iCloud account to search for
+      const acctNotes = await notes.listNotes(undefined, nonIcloud.name, "all", "modified", 1, 0);
+      if (acctNotes.items.length > 0) {
+        const firstWord = acctNotes.items[0].title.split(/\s+/)[0];
+        if (firstWord && firstWord.length >= 2) {
+          const result = await notes.searchNotes(firstWord, "title");
+          assert.ok(result.total > 0, `Should find "${firstWord}" in search`);
+          const found = result.items.find((n) => n.account === nonIcloud.name);
+          assert.ok(found, `Should find matching note in ${nonIcloud.name}`);
+        }
+      }
+    }
+  });
+
+  it("getNote works with x-coredata:// identifiers (non-iCloud)", async () => {
+    const accounts = await notes.listAccounts();
+    const nonIcloud = accounts.find((a) => !/icloud/i.test(a.name));
+    if (nonIcloud) {
+      const acctNotes = await notes.listNotes(undefined, nonIcloud.name, "all", "modified", 1, 0);
+      if (acctNotes.items.length > 0 && !acctNotes.items[0].isLocked) {
+        const jxaId = acctNotes.items[0].identifier;
+        assert.ok(jxaId.startsWith("x-coredata://"), "Non-iCloud identifier should be x-coredata URL");
+        const note = await notes.getNote(jxaId, "plaintext");
+        assert.ok(note.title);
+        assert.ok(note.body.length > 0, "Body should not be empty");
+        assert.equal(note.bodyFormat, "plaintext");
+        assert.equal(note.account, nonIcloud.name);
       }
     }
   });

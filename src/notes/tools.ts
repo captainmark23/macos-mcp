@@ -1,10 +1,13 @@
 /**
  * Apple Notes MCP tools.
  *
- * Read operations query the Notes SQLite database directly for instant
- * results. Write operations use JXA since the database is read-only.
+ * Hybrid read strategy:
+ *   - iCloud notes are in NoteStore.sqlite → SQLite for fast reads.
+ *   - Exchange / Gmail / other accounts keep data in separate Core Data
+ *     stores that are NOT in NoteStore.sqlite → JXA for reads.
+ *   - Write operations always use JXA (database is read-only).
  *
- * Provides: listFolders, listNotes, getNote, searchNotes,
+ * Provides: listAccounts, listFolders, listNotes, getNote, searchNotes,
  * createNote, updateNote, deleteNote, moveNote, createFolder
  */
 
@@ -13,6 +16,7 @@ import { sqliteQuery, sqlEscape, sqlLikeEscape, safeInt } from "../shared/sqlite
 import { isSanitizeBodies, getNotesFolders, getDefaultNotesAccount, getNotesDbPath } from "../shared/config.js";
 import {
   PaginatedResult,
+  paginateArray,
   paginateRows,
   CORE_DATA_EPOCH_OFFSET,
   SECONDS_PER_DAY,
@@ -80,63 +84,194 @@ export interface NoteFull extends NoteSummary {
 
 export type { PaginatedResult } from "../shared/types.js";
 
-// ─── Read Tools (SQLite — instant) ──────────────────────────────
+// ─── Read Tools ─────────────────────────────────────────────────
+// Hybrid: SQLite for iCloud accounts, JXA for non-iCloud (Exchange, Gmail, etc.)
+
+/**
+ * Get the set of account names whose data lives in NoteStore.sqlite.
+ * Non-iCloud accounts (Exchange, Gmail) use separate Core Data stores
+ * and must be queried via JXA.
+ */
+async function getSqliteAccountNames(): Promise<Set<string>> {
+  try {
+    const db = getNotesDbPath();
+    const rows = await sqliteQuery(
+      db,
+      `SELECT ZNAME FROM ZICCLOUDSYNCINGOBJECT
+       WHERE Z_ENT = ${ENT_ACCOUNT} AND ZNAME IS NOT NULL;`
+    );
+    return new Set(rows.map((r) => String(r.ZNAME)));
+  } catch {
+    return new Set();
+  }
+}
 
 export async function listAccounts(): Promise<NoteAccount[]> {
-  const db = getNotesDbPath();
-  const rows = await sqliteQuery(
-    db,
-    `SELECT ZNAME, ZIDENTIFIER
-     FROM ZICCLOUDSYNCINGOBJECT
-     WHERE Z_ENT = ${ENT_ACCOUNT}
-       AND ZNAME IS NOT NULL
-     ORDER BY ZNAME;`
-  );
-  return rows.map((r) => ({
-    name: String(r.ZNAME || ""),
-    identifier: String(r.ZIDENTIFIER || ""),
-  }));
+  // JXA returns all accounts (iCloud, Exchange, Gmail, etc.)
+  return executeJxa<NoteAccount[]>(`
+    const app = Application("Notes");
+    const accounts = app.accounts();
+    JSON.stringify(accounts.map(a => ({
+      name: a.name(),
+      identifier: a.id(),
+    })));
+  `);
 }
 
 export async function listFolders(
   account?: string,
   includeTrash = false
 ): Promise<NoteFolder[]> {
-  const db = getNotesDbPath();
-  const accountFilter = account
-    ? `AND a.ZNAME = '${sqlEscape(account)}'`
-    : "";
-  const trashFilter = includeTrash
-    ? ""
-    : "AND (f.ZFOLDERTYPE IS NULL OR f.ZFOLDERTYPE = 0)";
+  // Try SQLite first for iCloud folders (has richer metadata)
+  const sqliteAccounts = await getSqliteAccountNames();
+  const results: NoteFolder[] = [];
 
-  const rows = await sqliteQuery(
-    db,
-    `SELECT
-       f.ZIDENTIFIER AS identifier,
-       f.ZTITLE2 AS name,
-       f.ZFOLDERTYPE AS folder_type,
-       a.ZNAME AS account_name,
-       (SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT n
-        WHERE n.Z_ENT = ${ENT_NOTE} AND n.ZFOLDER = f.Z_PK
-        AND (n.ZMARKEDFORDELETION IS NULL OR n.ZMARKEDFORDELETION = 0)
-       ) AS note_count
-     FROM ZICCLOUDSYNCINGOBJECT f
-     LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = f.ZACCOUNT8
-     WHERE f.Z_ENT = ${ENT_FOLDER}
-       AND f.ZTITLE2 IS NOT NULL
-       ${trashFilter}
-       ${accountFilter}
-     ORDER BY f.ZTITLE2;`
-  );
+  // SQLite path: iCloud folders (unless user requested a specific non-SQLite account)
+  if (!account || sqliteAccounts.has(account)) {
+    try {
+      const db = getNotesDbPath();
+      const accountFilter = account
+        ? `AND a.ZNAME = '${sqlEscape(account)}'`
+        : "";
+      const trashFilter = includeTrash
+        ? ""
+        : "AND (f.ZFOLDERTYPE IS NULL OR f.ZFOLDERTYPE = 0)";
 
-  return rows.map((r) => ({
-    name: String(r.name || ""),
-    identifier: String(r.identifier || ""),
-    folderType: typeof r.folder_type === "number" ? r.folder_type : 0,
-    noteCount: typeof r.note_count === "number" ? r.note_count : safeInt(r.note_count ?? 0),
-    accountName: String(r.account_name || ""),
-  }));
+      const rows = await sqliteQuery(
+        db,
+        `SELECT
+           f.ZIDENTIFIER AS identifier,
+           f.ZTITLE2 AS name,
+           f.ZFOLDERTYPE AS folder_type,
+           a.ZNAME AS account_name,
+           (SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT n
+            WHERE n.Z_ENT = ${ENT_NOTE} AND n.ZFOLDER = f.Z_PK
+            AND (n.ZMARKEDFORDELETION IS NULL OR n.ZMARKEDFORDELETION = 0)
+           ) AS note_count
+         FROM ZICCLOUDSYNCINGOBJECT f
+         LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = f.ZACCOUNT8
+         WHERE f.Z_ENT = ${ENT_FOLDER}
+           AND f.ZTITLE2 IS NOT NULL
+           ${trashFilter}
+           ${accountFilter}
+         ORDER BY f.ZTITLE2;`
+      );
+
+      for (const r of rows) {
+        results.push({
+          name: String(r.name || ""),
+          identifier: String(r.identifier || ""),
+          folderType: typeof r.folder_type === "number" ? r.folder_type : 0,
+          noteCount: typeof r.note_count === "number" ? r.note_count : safeInt(r.note_count ?? 0),
+          accountName: String(r.account_name || ""),
+        });
+      }
+    } catch { /* SQLite unavailable — fall through to JXA */ }
+  }
+
+  // JXA path: non-iCloud accounts (or all accounts if SQLite failed)
+  const jxaAccountFilter = account ? jxaString(account) : "null";
+  const jxaFolders = await executeJxa<Array<{
+    name: string;
+    identifier: string;
+    noteCount: number;
+    accountName: string;
+  }>>(`
+    const app = Application("Notes");
+    const filterAccount = ${jxaAccountFilter};
+    const accounts = filterAccount
+      ? [app.accounts.byName(filterAccount)]
+      : app.accounts();
+    const sqliteAccounts = ${JSON.stringify([...sqliteAccounts])};
+    const results = [];
+    for (const acct of accounts) {
+      const acctName = acct.name();
+      if (sqliteAccounts.includes(acctName)) continue; // already handled via SQLite
+      try {
+        const folders = acct.folders();
+        for (const f of folders) {
+          results.push({
+            name: f.name(),
+            identifier: f.id(),
+            noteCount: f.notes().length,
+            accountName: acctName,
+          });
+        }
+      } catch(e) { /* skip inaccessible accounts */ }
+    }
+    JSON.stringify(results);
+  `);
+
+  for (const f of jxaFolders) {
+    // Skip trash for JXA folders (trash folder names vary by locale)
+    if (!includeTrash && /recently deleted|trash/i.test(f.name)) continue;
+    results.push({
+      name: f.name,
+      identifier: f.identifier,
+      folderType: 0,
+      noteCount: f.noteCount,
+      accountName: f.accountName,
+    });
+  }
+
+  return results.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Fetch notes from non-iCloud accounts via JXA.
+ * Returns NoteSummary objects with limited metadata (no snippet/pinned/checklist).
+ */
+async function listNotesViaJxa(
+  sqliteAccounts: Set<string>,
+  account?: string,
+  folder?: string,
+): Promise<NoteSummary[]> {
+  const jxaAccountFilter = account ? jxaString(account) : "null";
+  const jxaFolderFilter = folder ? jxaString(folder) : "null";
+  const configuredFolders = getNotesFolders();
+  const jxaConfiguredFolders = configuredFolders ? JSON.stringify(configuredFolders) : "null";
+
+  return executeJxa<NoteSummary[]>(`
+    const app = Application("Notes");
+    const filterAccount = ${jxaAccountFilter};
+    const filterFolder = ${jxaFolderFilter};
+    const configuredFolders = ${jxaConfiguredFolders};
+    const sqliteAccounts = ${JSON.stringify([...sqliteAccounts])};
+    const results = [];
+    const accounts = filterAccount
+      ? [app.accounts.byName(filterAccount)]
+      : app.accounts();
+    for (const acct of accounts) {
+      const acctName = acct.name();
+      if (sqliteAccounts.includes(acctName)) continue;
+      try {
+        const folders = filterFolder
+          ? [acct.folders.byName(filterFolder)]
+          : acct.folders();
+        for (const f of folders) {
+          const folderName = f.name();
+          if (configuredFolders && !configuredFolders.includes(folderName)) continue;
+          if (/recently deleted|trash/i.test(folderName)) continue;
+          const notes = f.notes();
+          for (const n of notes) {
+            results.push({
+              identifier: n.id(),
+              title: n.name(),
+              snippet: "",
+              creationDate: n.creationDate().toISOString(),
+              modificationDate: n.modificationDate().toISOString(),
+              folder: folderName,
+              account: acctName,
+              isPinned: false,
+              isLocked: n.passwordProtected(),
+              hasChecklist: false,
+            });
+          }
+        }
+      } catch(e) { /* skip inaccessible */ }
+    }
+    JSON.stringify(results);
+  `);
 }
 
 export async function listNotes(
@@ -147,98 +282,145 @@ export async function listNotes(
   limit = 25,
   offset = 0
 ): Promise<PaginatedResult<NoteSummary>> {
-  const db = getNotesDbPath();
-  const folderFilter = folderWhereClause(folder);
-  const accountFilter = account
-    ? `AND a.ZNAME = '${sqlEscape(account)}'`
-    : "";
+  const sqliteAccounts = await getSqliteAccountNames();
+  const isJxaOnlyAccount = account ? !sqliteAccounts.has(account) : false;
 
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfDayTs = Math.floor(startOfDay.getTime() / 1000) - CORE_DATA_EPOCH_OFFSET;
-  const startOfWeekTs = startOfDayTs - (now.getDay() * SECONDS_PER_DAY);
+  // ── SQLite path (iCloud accounts) ──
+  let sqliteItems: NoteSummary[] = [];
+  let sqliteTotal = 0;
 
-  let filterSql: string;
-  switch (filter) {
-    case "pinned":
-      filterSql = "AND n.ZISPINNED = 1";
-      break;
-    case "with_checklist":
-      filterSql = "AND n.ZHASCHECKLIST = 1";
-      break;
-    case "today":
-      filterSql = `AND n.ZMODIFICATIONDATE1 >= ${safeInt(startOfDayTs)}`;
-      break;
-    case "this_week":
-      filterSql = `AND n.ZMODIFICATIONDATE1 >= ${safeInt(startOfWeekTs)}`;
-      break;
-    default:
-      filterSql = "";
+  if (!isJxaOnlyAccount) {
+    const db = getNotesDbPath();
+    const folderFilter = folderWhereClause(folder);
+    const accountFilter = account
+      ? `AND a.ZNAME = '${sqlEscape(account)}'`
+      : "";
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfDayTs = Math.floor(startOfDay.getTime() / 1000) - CORE_DATA_EPOCH_OFFSET;
+    const startOfWeekTs = startOfDayTs - (now.getDay() * SECONDS_PER_DAY);
+
+    let filterSql: string;
+    switch (filter) {
+      case "pinned":
+        filterSql = "AND n.ZISPINNED = 1";
+        break;
+      case "with_checklist":
+        filterSql = "AND n.ZHASCHECKLIST = 1";
+        break;
+      case "today":
+        filterSql = `AND n.ZMODIFICATIONDATE1 >= ${safeInt(startOfDayTs)}`;
+        break;
+      case "this_week":
+        filterSql = `AND n.ZMODIFICATIONDATE1 >= ${safeInt(startOfWeekTs)}`;
+        break;
+      default:
+        filterSql = "";
+    }
+
+    let orderSql: string;
+    switch (sort) {
+      case "created":
+        orderSql = "n.ZCREATIONDATE3 DESC";
+        break;
+      case "title":
+        orderSql = "n.ZTITLE1 COLLATE NOCASE ASC";
+        break;
+      default:
+        orderSql = "n.ZMODIFICATIONDATE1 DESC";
+    }
+
+    const baseWhere = `n.Z_ENT = ${ENT_NOTE}
+      AND (n.ZMARKEDFORDELETION IS NULL OR n.ZMARKEDFORDELETION = 0)
+      ${filterSql} ${folderFilter} ${accountFilter}`;
+
+    const [rows, countRows] = await Promise.all([
+      sqliteQuery(
+        db,
+        `SELECT
+           n.ZIDENTIFIER AS identifier,
+           n.ZTITLE1 AS title,
+           n.ZSNIPPET AS snippet,
+           n.ZCREATIONDATE3 AS creation_date,
+           n.ZMODIFICATIONDATE1 AS modification_date,
+           n.ZISPINNED AS is_pinned,
+           n.ZISPASSWORDPROTECTED AS is_locked,
+           n.ZHASCHECKLIST AS has_checklist,
+           f.ZTITLE2 AS folder_name,
+           a.ZNAME AS account_name
+         FROM ZICCLOUDSYNCINGOBJECT n
+         LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = n.ZFOLDER
+         LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = n.ZACCOUNT7
+         WHERE ${baseWhere}
+         ORDER BY ${orderSql}
+         LIMIT ${safeInt(limit + 200)} OFFSET 0;`
+      ),
+      sqliteQuery(
+        db,
+        `SELECT COUNT(*) as total
+         FROM ZICCLOUDSYNCINGOBJECT n
+         LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = n.ZFOLDER
+         LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = n.ZACCOUNT7
+         WHERE ${baseWhere};`
+      ),
+    ]);
+
+    sqliteTotal = safeInt(countRows[0]?.total ?? 0);
+    sqliteItems = rows.map((r) => ({
+      identifier: String(r.identifier || ""),
+      title: String(r.title || ""),
+      snippet: stripInjectionPatterns(String(r.snippet || "")),
+      creationDate: fromCoreDataTimestamp(r.creation_date),
+      modificationDate: fromCoreDataTimestamp(r.modification_date),
+      folder: String(r.folder_name || ""),
+      account: String(r.account_name || ""),
+      isPinned: r.is_pinned === 1 || r.is_pinned === "1",
+      isLocked: r.is_locked === 1 || r.is_locked === "1",
+      hasChecklist: r.has_checklist === 1 || r.has_checklist === "1",
+    }));
   }
 
-  let orderSql: string;
+  // ── JXA path (non-iCloud accounts) ──
+  // Skip JXA for iCloud-only requests or filters that JXA can't handle
+  let jxaItems: NoteSummary[] = [];
+  const skipJxa = isJxaOnlyAccount === false && !!account; // specific iCloud account requested
+  const jxaUnsupportedFilter = filter === "pinned" || filter === "with_checklist";
+
+  if (!skipJxa && !jxaUnsupportedFilter) {
+    const rawJxa = await listNotesViaJxa(sqliteAccounts, account, folder);
+    // Apply date filters client-side for JXA notes
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfDay);
+    startOfWeek.setDate(startOfWeek.getDate() - now.getDay());
+
+    jxaItems = rawJxa.filter((n) => {
+      if (filter === "today") return new Date(n.modificationDate) >= startOfDay;
+      if (filter === "this_week") return new Date(n.modificationDate) >= startOfWeek;
+      return true;
+    });
+  }
+
+  // ── Merge & sort ──
+  const allItems = [...sqliteItems, ...jxaItems];
+  const total = sqliteTotal + jxaItems.length;
+
+  // Sort merged results
   switch (sort) {
     case "created":
-      orderSql = "n.ZCREATIONDATE3 DESC";
+      allItems.sort((a, b) => new Date(b.creationDate).getTime() - new Date(a.creationDate).getTime());
       break;
     case "title":
-      orderSql = "n.ZTITLE1 COLLATE NOCASE ASC";
+      allItems.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
       break;
     default:
-      orderSql = "n.ZMODIFICATIONDATE1 DESC";
+      allItems.sort((a, b) => new Date(b.modificationDate).getTime() - new Date(a.modificationDate).getTime());
   }
 
-  const baseWhere = `n.Z_ENT = ${ENT_NOTE}
-    AND (n.ZMARKEDFORDELETION IS NULL OR n.ZMARKEDFORDELETION = 0)
-    ${filterSql} ${folderFilter} ${accountFilter}`;
-
-  const [rows, countRows] = await Promise.all([
-    sqliteQuery(
-      db,
-      `SELECT
-         n.ZIDENTIFIER AS identifier,
-         n.ZTITLE1 AS title,
-         n.ZSNIPPET AS snippet,
-         n.ZCREATIONDATE3 AS creation_date,
-         n.ZMODIFICATIONDATE1 AS modification_date,
-         n.ZISPINNED AS is_pinned,
-         n.ZISPASSWORDPROTECTED AS is_locked,
-         n.ZHASCHECKLIST AS has_checklist,
-         f.ZTITLE2 AS folder_name,
-         a.ZNAME AS account_name
-       FROM ZICCLOUDSYNCINGOBJECT n
-       LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = n.ZFOLDER
-       LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = n.ZACCOUNT7
-       WHERE ${baseWhere}
-       ORDER BY ${orderSql}
-       LIMIT ${safeInt(limit)} OFFSET ${safeInt(offset)};`
-    ),
-    sqliteQuery(
-      db,
-      `SELECT COUNT(*) as total
-       FROM ZICCLOUDSYNCINGOBJECT n
-       LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = n.ZFOLDER
-       LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = n.ZACCOUNT7
-       WHERE ${baseWhere};`
-    ),
-  ]);
-
-  const total = safeInt(countRows[0]?.total ?? 0);
-
-  const items: NoteSummary[] = rows.map((r) => ({
-    identifier: String(r.identifier || ""),
-    title: String(r.title || ""),
-    snippet: stripInjectionPatterns(String(r.snippet || "")),
-    creationDate: fromCoreDataTimestamp(r.creation_date),
-    modificationDate: fromCoreDataTimestamp(r.modification_date),
-    folder: String(r.folder_name || ""),
-    account: String(r.account_name || ""),
-    isPinned: r.is_pinned === 1 || r.is_pinned === "1",
-    isLocked: r.is_locked === 1 || r.is_locked === "1",
-    hasChecklist: r.has_checklist === 1 || r.has_checklist === "1",
-  }));
-
-  return paginateRows(items, total, offset);
+  // Apply pagination to merged results
+  const paged = allItems.slice(offset, offset + limit);
+  return paginateRows(paged, total, offset);
 }
 
 export async function searchNotes(
@@ -248,6 +430,9 @@ export async function searchNotes(
   limit = 20,
   offset = 0
 ): Promise<PaginatedResult<NoteSummary>> {
+  const sqliteAccounts = await getSqliteAccountNames();
+
+  // ── SQLite path (iCloud) ──
   const db = getNotesDbPath();
   const escapedQuery = sqlLikeEscape(query);
   const folderFilter = folderWhereClause(folder);
@@ -287,7 +472,7 @@ export async function searchNotes(
        LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = n.ZACCOUNT7
        WHERE ${baseWhere}
        ORDER BY n.ZMODIFICATIONDATE1 DESC
-       LIMIT ${safeInt(limit)} OFFSET ${safeInt(offset)};`
+       LIMIT ${safeInt(limit + 200)} OFFSET 0;`
     ),
     sqliteQuery(
       db,
@@ -299,9 +484,8 @@ export async function searchNotes(
     ),
   ]);
 
-  const total = safeInt(countRows[0]?.total ?? 0);
-
-  const items: NoteSummary[] = rows.map((r) => ({
+  const sqliteTotal = safeInt(countRows[0]?.total ?? 0);
+  const sqliteItems: NoteSummary[] = rows.map((r) => ({
     identifier: String(r.identifier || ""),
     title: String(r.title || ""),
     snippet: stripInjectionPatterns(String(r.snippet || "")),
@@ -314,18 +498,70 @@ export async function searchNotes(
     hasChecklist: r.has_checklist === 1 || r.has_checklist === "1",
   }));
 
-  return paginateRows(items, total, offset);
+  // ── JXA path (non-iCloud accounts): search by title via .whose() ──
+  const jxaItems = await executeJxa<NoteSummary[]>(`
+    const app = Application("Notes");
+    const sqliteAccounts = ${JSON.stringify([...sqliteAccounts])};
+    const query = ${jxaString(query)}.toLowerCase();
+    const scope = ${jxaString(scope)};
+    const results = [];
+    for (const acct of app.accounts()) {
+      const acctName = acct.name();
+      if (sqliteAccounts.includes(acctName)) continue;
+      try {
+        // JXA .whose() only supports name matching, so always search by title
+        const matches = acct.notes.whose({name: {_contains: ${jxaString(query)}}})();
+        for (const n of matches) {
+          const folderName = n.container().name();
+          ${folder ? `if (folderName !== ${jxaString(folder)}) continue;` : ""}
+          results.push({
+            identifier: n.id(),
+            title: n.name(),
+            snippet: "",
+            creationDate: n.creationDate().toISOString(),
+            modificationDate: n.modificationDate().toISOString(),
+            folder: folderName,
+            account: acctName,
+            isPinned: false,
+            isLocked: n.passwordProtected(),
+            hasChecklist: false,
+          });
+        }
+      } catch(e) { /* skip */ }
+    }
+    JSON.stringify(results);
+  `);
+
+  // Merge and paginate
+  const allItems = [...sqliteItems, ...jxaItems];
+  const total = sqliteTotal + jxaItems.length;
+  allItems.sort((a, b) => new Date(b.modificationDate).getTime() - new Date(a.modificationDate).getTime());
+  const paged = allItems.slice(offset, offset + limit);
+  return paginateRows(paged, total, offset);
 }
 
 /**
- * Get full note details including body via JXA.
- * Body is fetched via JXA because SQLite stores it as gzip'd protobuf.
+ * Check if an identifier is a JXA x-coredata URL (non-iCloud note).
+ */
+function isJxaIdentifier(identifier: string): boolean {
+  return identifier.startsWith("x-coredata://");
+}
+
+/**
+ * Get full note details including body.
+ * For iCloud notes: metadata from SQLite, body via JXA.
+ * For non-iCloud notes (Exchange, etc.): everything via JXA.
  */
 export async function getNote(
   identifier: string,
   format: "plaintext" | "html" = "plaintext"
 ): Promise<NoteFull> {
-  // First get metadata from SQLite (fast)
+  // ── JXA-only path (non-iCloud notes use x-coredata:// identifiers) ──
+  if (isJxaIdentifier(identifier)) {
+    return getNoteViaJxa(identifier, format);
+  }
+
+  // ── SQLite + JXA path (iCloud notes) ──
   const db = getNotesDbPath();
   const rows = await sqliteQuery(
     db,
@@ -356,7 +592,6 @@ export async function getNote(
   const r = rows[0];
   const isLocked = r.is_locked === 1 || r.is_locked === "1";
 
-  // Fetch body via JXA (required — body is protobuf in SQLite)
   let body = "";
   let shared = false;
   let attachmentCount = typeof r.attachment_count === "number"
@@ -366,10 +601,6 @@ export async function getNote(
   if (isLocked) {
     body = "[This note is password-protected. Unlock it in Notes.app to read the body.]";
   } else {
-    // JXA note IDs are x-coredata:// URIs (e.g. x-coredata://UUID/ICNote/p133)
-    // where the suffix 'p133' matches Z_PK in SQLite. The prefix varies per account.
-    // We look up by title within the account, and disambiguate by
-    // creation date if there are multiple notes with the same title.
     const noteTitle = String(r.title || "");
     const accountName = String(r.account_name || "");
     const creationIso = fromCoreDataTimestamp(r.creation_date);
@@ -381,35 +612,7 @@ export async function getNote(
       attachmentCount: number;
     }>(`
       const app = Application("Notes");
-      const title = ${jxaString(noteTitle)};
-      const accountName = ${jxaString(accountName)};
-      const targetCreation = ${jxaString(creationIso)};
-
-      // Search within the account if known, otherwise all notes
-      let candidates;
-      if (accountName) {
-        try {
-          candidates = app.accounts.byName(accountName).notes.whose({name: title})();
-        } catch(e) {
-          candidates = app.notes.whose({name: title})();
-        }
-      } else {
-        candidates = app.notes.whose({name: title})();
-      }
-
-      if (candidates.length === 0) throw new Error("Note not found via JXA");
-
-      // Disambiguate by creation date if multiple matches
-      let n = candidates[0];
-      if (candidates.length > 1 && targetCreation) {
-        const targetMs = new Date(targetCreation).getTime();
-        for (const c of candidates) {
-          if (Math.abs(c.creationDate().getTime() - targetMs) < 2000) {
-            n = c;
-            break;
-          }
-        }
-      }
+      ${jxaFindNoteSnippet(noteTitle, accountName, creationIso)}
 
       JSON.stringify({
         plaintext: n.plaintext(),
@@ -422,7 +625,6 @@ export async function getNote(
     shared = jxaResult.shared;
     attachmentCount = jxaResult.attachmentCount;
 
-    // Apply body sanitization if configured
     if (isSanitizeBodies()) {
       body = sanitizeBodyContent(body, "NOTE");
     } else {
@@ -445,6 +647,87 @@ export async function getNote(
     bodyFormat: format,
     attachmentCount,
     shared,
+  };
+}
+
+/**
+ * Get a note entirely via JXA (for non-iCloud accounts like Exchange/Gmail).
+ * Uses the x-coredata:// ID to look up the note directly.
+ */
+async function getNoteViaJxa(
+  jxaId: string,
+  format: "plaintext" | "html"
+): Promise<NoteFull> {
+  const result = await executeJxa<{
+    identifier: string;
+    title: string;
+    creationDate: string;
+    modificationDate: string;
+    folder: string;
+    account: string;
+    isLocked: boolean;
+    shared: boolean;
+    attachmentCount: number;
+    plaintext: string;
+    html: string;
+  }>(`
+    const app = Application("Notes");
+    const jxaId = ${jxaString(jxaId)};
+    // Find the note across all accounts by matching ID
+    let found = null;
+    for (const acct of app.accounts()) {
+      try {
+        const notes = acct.notes();
+        for (const n of notes) {
+          if (n.id() === jxaId) { found = n; break; }
+        }
+        if (found) break;
+      } catch(e) {}
+    }
+    if (!found) throw new Error("Note not found");
+    const n = found;
+    JSON.stringify({
+      identifier: n.id(),
+      title: n.name(),
+      creationDate: n.creationDate().toISOString(),
+      modificationDate: n.modificationDate().toISOString(),
+      folder: n.container().name(),
+      account: n.container().container().name(),
+      isLocked: n.passwordProtected(),
+      shared: n.shared(),
+      attachmentCount: n.attachments().length,
+      plaintext: n.passwordProtected() ? "" : n.plaintext(),
+      html: n.passwordProtected() ? "" : n.body(),
+    });
+  `);
+
+  let body: string;
+  if (result.isLocked) {
+    body = "[This note is password-protected. Unlock it in Notes.app to read the body.]";
+  } else {
+    body = format === "html" ? result.html : result.plaintext;
+    if (isSanitizeBodies()) {
+      body = sanitizeBodyContent(body, "NOTE");
+    } else {
+      body = stripInjectionPatterns(body);
+    }
+  }
+
+  return {
+    identifier: result.identifier,
+    title: result.title,
+    snippet: "",
+    creationDate: result.creationDate,
+    modificationDate: result.modificationDate,
+    folder: result.folder,
+    account: result.account,
+    isPinned: false,
+    isLocked: result.isLocked,
+    hasChecklist: false,
+    body,
+    bodyFormat: format,
+    attachmentCount: result.attachmentCount,
+    shared: result.shared,
   };
 }
 
@@ -472,15 +755,39 @@ export function textToHtml(text: string): string {
 }
 
 /**
- * Resolve a note UUID (ZIDENTIFIER) to its title, account, and creation date
- * for JXA lookup. JXA uses x-coredata:// IDs which differ from SQLite UUIDs,
- * so we must look up by title + creation date for disambiguation.
+ * Resolve a note identifier to its title, account, and creation date for JXA lookup.
+ * For iCloud notes (SQLite UUID): queries NoteStore.sqlite.
+ * For non-iCloud notes (x-coredata:// URL): queries JXA directly.
  */
 async function resolveNoteForJxa(identifier: string): Promise<{
   title: string;
   accountName: string;
   creationIso: string;
 }> {
+  if (isJxaIdentifier(identifier)) {
+    // Non-iCloud: resolve via JXA
+    return executeJxa(`
+      const app = Application("Notes");
+      const jxaId = ${jxaString(identifier)};
+      let found = null;
+      for (const acct of app.accounts()) {
+        try {
+          for (const n of acct.notes()) {
+            if (n.id() === jxaId) { found = { n, acct }; break; }
+          }
+          if (found) break;
+        } catch(e) {}
+      }
+      if (!found) throw new Error("Note not found");
+      JSON.stringify({
+        title: found.n.name(),
+        accountName: found.acct.name(),
+        creationIso: found.n.creationDate().toISOString(),
+      });
+    `);
+  }
+
+  // iCloud: resolve via SQLite
   const db = getNotesDbPath();
   const rows = await sqliteQuery(
     db,
