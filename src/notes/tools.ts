@@ -8,12 +8,9 @@
  * createNote, updateNote, deleteNote, moveNote, createFolder
  */
 
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
 import { executeJxa, executeJxaWrite, jxaString } from "../shared/applescript.js";
 import { sqliteQuery, sqlEscape, sqlLikeEscape, safeInt } from "../shared/sqlite.js";
-import { isSanitizeBodies } from "../shared/config.js";
+import { isSanitizeBodies, getNotesFolders, getDefaultNotesAccount, getNotesDbPath } from "../shared/config.js";
 import {
   PaginatedResult,
   paginateRows,
@@ -24,34 +21,7 @@ import {
   sanitizeBodyContent,
 } from "../shared/types.js";
 
-// ─── Database ────────────────────────────────────────────────────
-
-let _notesDbPath: string | null = null;
-
-export function getNotesDbPath(): string {
-  if (_notesDbPath) return _notesDbPath;
-  const dbPath = join(
-    homedir(),
-    "Library/Group Containers/group.com.apple.notes/NoteStore.sqlite"
-  );
-  if (!existsSync(dbPath)) {
-    throw new Error("Notes database not found. Is Notes.app configured?");
-  }
-  _notesDbPath = dbPath;
-  return _notesDbPath;
-}
-
-// ─── Configuration ───────────────────────────────────────────────
-
-export function getNotesFolders(): string[] | null {
-  const val = process.env.MACOS_MCP_NOTES_FOLDERS;
-  if (!val) return null;
-  return val.split(",").map((s) => s.trim()).filter(Boolean);
-}
-
-export function getDefaultNotesAccount(): string | undefined {
-  return process.env.MACOS_MCP_NOTES_ACCOUNT || undefined;
-}
+export { getNotesFolders, getDefaultNotesAccount, getNotesDbPath } from "../shared/config.js";
 
 /** Build SQL WHERE clause for configured note folders. */
 function folderWhereClause(folder?: string): string {
@@ -454,7 +424,7 @@ export async function getNote(
 
     // Apply body sanitization if configured
     if (isSanitizeBodies()) {
-      body = sanitizeBodyContent(body);
+      body = sanitizeBodyContent(body, "NOTE");
     } else {
       body = stripInjectionPatterns(body);
     }
