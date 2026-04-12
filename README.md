@@ -88,7 +88,7 @@ To disable all write operations (send, reply, forward, create, delete, etc.):
 }
 ```
 
-When enabled, write tools are not registered and won't appear in the tool list.
+When enabled, write tools are not registered and won't appear in the tool list, except `mail_move` and `mail_set_flags` (kept available for inbox triage workflows).
 Read operations (listing, searching, viewing) and FTS indexing remain available.
 
 ## Tools (33)
