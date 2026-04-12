@@ -236,6 +236,9 @@ export function registerMailTools(server: McpServer): void {
     } catch (e) { return err(e); }
   });
 
+  } // end read-only guard
+
+  // Keep mail move available in read-only mode to support inbox triage workflows.
   server.registerTool("mail_move", {
     title: "Move Email",
     description: "Move an email to a different mailbox. Source mailbox and account are auto-resolved from the message ID if not provided. Use when: organizing emails into folders, archiving messages",
@@ -254,6 +257,7 @@ export function registerMailTools(server: McpServer): void {
     } catch (e) { return err(e); }
   });
 
+  // Keep flag/read updates available even in read-only mode to support inbox triage.
   server.registerTool("mail_set_flags", {
     title: "Set Email Flags",
     description: "Set flagged and/or read status on an email. Mailbox and account are auto-resolved from the message ID if not provided. Use when: marking emails as read/unread, flagging important messages",
@@ -272,8 +276,6 @@ export function registerMailTools(server: McpServer): void {
       return ok(result, false);
     } catch (e) { return err(e); }
   });
-  } // end read-only guard
-
   // ─── FTS Tools ──────────────────────────────────────────────────
 
   server.registerTool("mail_search_body", {

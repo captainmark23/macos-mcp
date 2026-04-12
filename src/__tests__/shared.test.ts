@@ -563,7 +563,7 @@ describe("isReadOnly", () => {
 
 // ─── Read-only integration: tool registration ────────────────────
 
-const MAIL_WRITE_TOOLS = ["mail_send", "mail_create_draft", "mail_reply", "mail_forward", "mail_move", "mail_set_flags"];
+const MAIL_WRITE_TOOLS = ["mail_send", "mail_create_draft", "mail_reply", "mail_forward"];
 const CALENDAR_WRITE_TOOLS = ["calendar_create_event", "calendar_modify_event", "calendar_delete_event"];
 const REMINDERS_WRITE_TOOLS = ["reminders_create", "reminders_complete", "reminders_delete"];
 
@@ -586,22 +586,26 @@ describe("read-only integration: registerMailTools", () => {
     }
   });
 
-  it("omits all 6 write tools when MACOS_MCP_READONLY=true", () => {
+  it("omits write-only mail tools but keeps mail_move and mail_set_flags when MACOS_MCP_READONLY=true", () => {
     process.env.MACOS_MCP_READONLY = "true";
     const { server, registeredTools } = makeMockServer();
     registerMailTools(server);
     for (const tool of MAIL_WRITE_TOOLS) {
       assert.ok(!registeredTools().includes(tool), `Expected ${tool} to be absent in read-only mode`);
     }
+    assert.ok(registeredTools().includes("mail_move"), "Expected mail_move to remain available in read-only mode");
+    assert.ok(registeredTools().includes("mail_set_flags"), "Expected mail_set_flags to remain available in read-only mode");
   });
 
-  it("includes all 6 write tools when MACOS_MCP_READONLY is not set", () => {
+  it("includes all write tools when MACOS_MCP_READONLY is not set", () => {
     delete process.env.MACOS_MCP_READONLY;
     const { server, registeredTools } = makeMockServer();
     registerMailTools(server);
     for (const tool of MAIL_WRITE_TOOLS) {
       assert.ok(registeredTools().includes(tool), `Expected ${tool} to be present in normal mode`);
     }
+    assert.ok(registeredTools().includes("mail_move"), "Expected mail_move to be present in normal mode");
+    assert.ok(registeredTools().includes("mail_set_flags"), "Expected mail_set_flags to be present in normal mode");
   });
 
   it("still registers read-only tools regardless of MACOS_MCP_READONLY", () => {
