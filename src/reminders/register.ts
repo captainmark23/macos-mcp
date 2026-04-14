@@ -4,7 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { ok, err, isoDateString, paginatedOutput, SuccessZ, SuccessIdZ, resource } from "../shared/mcp-helpers.js";
+import { ok, err, isoDateString, paginatedOutput, SuccessZ, SuccessIdZ, resource, confirmParam, needsConfirmation } from "../shared/mcp-helpers.js";
 import { isReadOnly } from "../shared/config.js";
 import * as reminders from "./tools.js";
 
@@ -126,11 +126,14 @@ export function registerRemindersTools(server: McpServer): void {
     inputSchema: z.object({
       reminderId: z.string().max(500),
       list: z.string().max(200, "Name too long"),
+      confirm: confirmParam,
     }).strict(),
     outputSchema: SuccessZ,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, async ({ reminderId, list }) => {
+  }, async ({ reminderId, list, confirm }) => {
     try {
+      const guard = needsConfirmation(confirm, "reminders_delete", "This will permanently delete the reminder.");
+      if (guard) return guard;
       const result = await reminders.deleteReminder(reminderId, list);
       return ok(result, false);
     } catch (e) { return err(e); }

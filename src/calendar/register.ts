@@ -4,7 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { ok, err, isoDateString, paginatedOutput, SuccessZ, SuccessIdZ, resource } from "../shared/mcp-helpers.js";
+import { ok, err, isoDateString, paginatedOutput, SuccessZ, SuccessIdZ, resource, confirmParam, needsConfirmation } from "../shared/mcp-helpers.js";
 import { isReadOnly } from "../shared/config.js";
 import * as calendar from "./tools.js";
 
@@ -179,11 +179,14 @@ export function registerCalendarTools(server: McpServer): void {
     inputSchema: z.object({
       eventId: z.string().max(500),
       calendar: z.string().max(200, "Name too long"),
+      confirm: confirmParam,
     }).strict(),
     outputSchema: SuccessZ,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, async ({ eventId, calendar: cal }) => {
+  }, async ({ eventId, calendar: cal, confirm }) => {
     try {
+      const guard = needsConfirmation(confirm, "calendar_delete_event", "This will permanently delete the calendar event.");
+      if (guard) return guard;
       const result = await calendar.deleteEvent(eventId, cal);
       return ok(result, false);
     } catch (e) { return err(e); }

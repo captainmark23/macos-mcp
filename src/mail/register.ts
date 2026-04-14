@@ -4,7 +4,7 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { ok, err, paginatedOutput, SuccessZ, SuccessMessageZ, resource } from "../shared/mcp-helpers.js";
+import { ok, err, paginatedOutput, SuccessZ, SuccessMessageZ, resource, confirmParam, needsConfirmation } from "../shared/mcp-helpers.js";
 import { sanitizeErrorMessage } from "../shared/types.js";
 import { isReadOnly } from "../shared/config.js";
 import * as mail from "./tools.js";
@@ -166,11 +166,14 @@ export function registerMailTools(server: McpServer): void {
       cc: z.array(z.string().email("Invalid email address")).optional().describe("CC addresses"),
       bcc: z.array(z.string().email("Invalid email address")).optional().describe("BCC addresses"),
       account: z.string().max(200, "Name too long").optional(),
+      confirm: confirmParam,
     }).strict(),
     outputSchema: SuccessMessageZ,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ to, subject, body, htmlBody, cc, bcc, account }) => {
+  }, async ({ to, subject, body, htmlBody, cc, bcc, account, confirm }) => {
     try {
+      const guard = needsConfirmation(confirm, "mail_send", `This will send an email to ${to.join(", ")}.`);
+      if (guard) return guard;
       const result = await mail.sendEmail(to, subject, body, cc, bcc, account, htmlBody);
       return ok(result, false);
     } catch (e) { return err(e); }
@@ -206,11 +209,16 @@ export function registerMailTools(server: McpServer): void {
       send: z.boolean().default(true).describe("Send immediately or save as draft"),
       mailbox: z.string().max(200, "Name too long").optional().describe("Mailbox name. If omitted, auto-resolved from the message ID."),
       account: z.string().max(200, "Name too long").optional().describe("Account name. If omitted, auto-resolved from the message ID."),
+      confirm: confirmParam,
     }).strict(),
     outputSchema: SuccessMessageZ,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ messageId, body, replyAll, send, mailbox, account }) => {
+  }, async ({ messageId, body, replyAll, send, mailbox, account, confirm }) => {
     try {
+      if (send) {
+        const guard = needsConfirmation(confirm, "mail_reply", "This will send a reply immediately.");
+        if (guard) return guard;
+      }
       const result = await mail.replyTo(messageId, body, replyAll, send, mailbox, account);
       return ok(result, false);
     } catch (e) { return err(e); }
@@ -226,11 +234,16 @@ export function registerMailTools(server: McpServer): void {
       send: z.boolean().default(true),
       mailbox: z.string().max(200, "Name too long").optional().describe("Mailbox name. If omitted, auto-resolved from the message ID."),
       account: z.string().max(200, "Name too long").optional().describe("Account name. If omitted, auto-resolved from the message ID."),
+      confirm: confirmParam,
     }).strict(),
     outputSchema: SuccessMessageZ,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ messageId, to, body, send, mailbox, account }) => {
+  }, async ({ messageId, to, body, send, mailbox, account, confirm }) => {
     try {
+      if (send) {
+        const guard = needsConfirmation(confirm, "mail_forward", `This will forward the email to ${to.join(", ")}.`);
+        if (guard) return guard;
+      }
       const result = await mail.forwardMessage(messageId, to, body, send, mailbox, account);
       return ok(result, false);
     } catch (e) { return err(e); }

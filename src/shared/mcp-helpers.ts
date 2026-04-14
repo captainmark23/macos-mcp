@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { sanitizeErrorMessage } from "./types.js";
+import { isConfirmDestructive } from "./config.js";
 
 /** Maximum characters for a JSON-stringified response before truncation kicks in. */
 const MAX_RESPONSE_CHARS = 25_000;
@@ -120,6 +121,33 @@ export function paginatedOutput<T extends z.ZodTypeAny>(itemSchema: T) {
     items: z.array(itemSchema),
     has_more: z.boolean(),
     next_offset: z.number().optional(),
+  };
+}
+
+/**
+ * Zod schema for the optional `confirm` parameter on destructive tools.
+ * Add this to inputSchema when `MACOS_MCP_CONFIRM_DESTRUCTIVE` is enabled.
+ */
+export const confirmParam = z.boolean().default(false).describe(
+  "Set to true to confirm this destructive action. When MACOS_MCP_CONFIRM_DESTRUCTIVE is enabled, the tool will return a warning if this is not true."
+);
+
+/**
+ * Check if a destructive tool should proceed.
+ * Returns a warning response if confirmation is required but not provided,
+ * or null if the tool should proceed normally.
+ */
+export function needsConfirmation(
+  confirm: boolean,
+  toolName: string,
+  description: string
+): ReturnType<typeof ok> | null {
+  if (!isConfirmDestructive() || confirm) return null;
+  return {
+    content: [{
+      type: "text" as const,
+      text: `Action "${toolName}" requires confirmation. ${description} Please check with the user, then call again with confirm: true.`,
+    }],
   };
 }
 

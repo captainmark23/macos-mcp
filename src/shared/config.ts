@@ -40,6 +40,17 @@ export function isReadOnly(): boolean {
 }
 
 /**
+ * When true, destructive tools (send email, delete event/reminder) require
+ * an explicit `confirm: true` parameter. If omitted, they return a warning
+ * asking the LLM to check with the user first.
+ * Controlled by MACOS_MCP_CONFIRM_DESTRUCTIVE=true|1.
+ */
+export function isConfirmDestructive(): boolean {
+  const val = process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE;
+  return val === "true" || val === "1";
+}
+
+/**
  * When true, mail_send saves to Mail.app drafts instead of sending.
  * Controlled by MACOS_MCP_SEND_AS_DRAFT=true|1.
  */
