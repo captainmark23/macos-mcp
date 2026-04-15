@@ -33,7 +33,7 @@ function folderWhereClause(folder?: string): string {
     return `AND f.ZTITLE2 = '${sqlEscape(folder)}'`;
   }
   const configured = getNotesFolders();
-  if (configured) {
+  if (configured && configured.length > 0) {
     const names = configured.map((n) => `'${sqlEscape(n)}'`).join(", ");
     return `AND f.ZTITLE2 IN (${names})`;
   }
@@ -354,6 +354,8 @@ export async function listNotes(
          LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = n.ZACCOUNT7
          WHERE ${baseWhere}
          ORDER BY ${orderSql}
+         -- Over-fetch from SQLite so we have enough rows after merging with
+         -- JXA (non-iCloud) results and re-sorting the combined set.
          LIMIT ${safeInt(limit + 200)} OFFSET 0;`
       ),
       sqliteQuery(
@@ -472,6 +474,8 @@ export async function searchNotes(
        LEFT JOIN ZICCLOUDSYNCINGOBJECT a ON a.Z_PK = n.ZACCOUNT7
        WHERE ${baseWhere}
        ORDER BY n.ZMODIFICATIONDATE1 DESC
+       -- Over-fetch from SQLite so we have enough rows after merging with
+       -- JXA (non-iCloud) results and re-sorting the combined set.
        LIMIT ${safeInt(limit + 200)} OFFSET 0;`
     ),
     sqliteQuery(
@@ -652,7 +656,7 @@ export async function getNote(
 
 /**
  * Get a note entirely via JXA (for non-iCloud accounts like Exchange/Gmail).
- * Uses the x-coredata:// ID to look up the note directly.
+ * Uses the x-coredata:// ID to look up the note directly via byId().
  */
 async function getNoteViaJxa(
   jxaId: string,
@@ -673,19 +677,14 @@ async function getNoteViaJxa(
   }>(`
     const app = Application("Notes");
     const jxaId = ${jxaString(jxaId)};
-    // Find the note across all accounts by matching ID
-    let found = null;
-    for (const acct of app.accounts()) {
-      try {
-        const notes = acct.notes();
-        for (const n of notes) {
-          if (n.id() === jxaId) { found = n; break; }
-        }
-        if (found) break;
-      } catch(e) {}
+    // Direct lookup by Core Data ID — avoids iterating all notes
+    let n;
+    try {
+      n = app.notes.byId(jxaId);
+      n.name(); // force resolution — throws if not found
+    } catch(e) {
+      throw new Error("Note not found");
     }
-    if (!found) throw new Error("Note not found");
-    const n = found;
     JSON.stringify({
       identifier: n.id(),
       title: n.name(),
@@ -765,24 +764,21 @@ async function resolveNoteForJxa(identifier: string): Promise<{
   creationIso: string;
 }> {
   if (isJxaIdentifier(identifier)) {
-    // Non-iCloud: resolve via JXA
+    // Non-iCloud: resolve via direct byId() lookup
     return executeJxa(`
       const app = Application("Notes");
       const jxaId = ${jxaString(identifier)};
-      let found = null;
-      for (const acct of app.accounts()) {
-        try {
-          for (const n of acct.notes()) {
-            if (n.id() === jxaId) { found = { n, acct }; break; }
-          }
-          if (found) break;
-        } catch(e) {}
+      let n;
+      try {
+        n = app.notes.byId(jxaId);
+        n.name(); // force resolution — throws if not found
+      } catch(e) {
+        throw new Error("Note not found");
       }
-      if (!found) throw new Error("Note not found");
       JSON.stringify({
-        title: found.n.name(),
-        accountName: found.acct.name(),
-        creationIso: found.n.creationDate().toISOString(),
+        title: n.name(),
+        accountName: n.container().container().name(),
+        creationIso: n.creationDate().toISOString(),
       });
     `);
   }
@@ -829,6 +825,9 @@ function jxaFindNoteSnippet(title: string, accountName: string, creationIso: str
       if (_candidates.length === 0) throw new Error("Note not found");
       let n = _candidates[0];
       if (_candidates.length > 1 && _targetCreation) {
+        // SQLite and JXA may report slightly different creation timestamps
+        // (Core Data vs JXA bridging). 2s tolerance handles the drift while
+        // remaining tight enough to distinguish genuinely different notes.
         const _targetMs = new Date(_targetCreation).getTime();
         for (const _c of _candidates) {
           if (Math.abs(_c.creationDate().getTime() - _targetMs) < 2000) {

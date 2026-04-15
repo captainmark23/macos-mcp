@@ -94,6 +94,11 @@ describe("getNotesFolders", () => {
     process.env.MACOS_MCP_NOTES_FOLDERS = "  ,Work,  ";
     assert.deepEqual(getNotesFolders(), ["Work"]);
   });
+
+  it("returns null for comma-only value", () => {
+    process.env.MACOS_MCP_NOTES_FOLDERS = ",,,";
+    assert.equal(getNotesFolders(), null);
+  });
 });
 
 // ─── getDefaultNotesAccount ─────────────────────────────────────

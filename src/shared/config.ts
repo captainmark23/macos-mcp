@@ -112,7 +112,8 @@ export function findBlockedRecipient(addresses: string[]): string | null {
 export function getNotesFolders(): string[] | null {
   const val = process.env.MACOS_MCP_NOTES_FOLDERS;
   if (!val) return null;
-  return val.split(",").map((s) => s.trim()).filter(Boolean);
+  const folders = val.split(",").map((s) => s.trim()).filter(Boolean);
+  return folders.length > 0 ? folders : null;
 }
 
 export function getDefaultNotesAccount(): string | undefined {
