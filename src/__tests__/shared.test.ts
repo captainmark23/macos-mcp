@@ -7,7 +7,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { sqlEscape, sqlLikeEscape, safeInt } from "../shared/sqlite.js";
 import { paginateArray, paginateRows, fromCoreDataTimestamp, sanitizeErrorMessage, stripInjectionPatterns, sanitizeBodyContent } from "../shared/types.js";
-import { isReadOnly, isSendAsDraft, isSanitizeBodies } from "../shared/config.js";
+import { isReadOnly, isSendAsDraft, isSanitizeBodies, isConfirmDestructive } from "../shared/config.js";
 import { jxaString, jxaStringArray } from "../shared/applescript.js";
 import { emlxSubpath, decodeQuotedPrintable, stripHtml } from "../mail/fts.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -15,6 +15,7 @@ import { registerMailTools } from "../mail/register.js";
 import { registerCalendarTools } from "../calendar/register.js";
 import { registerRemindersTools } from "../reminders/register.js";
 import { matchesAllowlist, findBlockedRecipient } from "../shared/config.js";
+import { needsConfirmation } from "../shared/mcp-helpers.js";
 
 // ─── sqlEscape ──────────────────────────────────────────────────
 
@@ -886,5 +887,78 @@ describe("isSanitizeBodies", () => {
   it("returns false for other values", () => {
     process.env.MACOS_MCP_SANITIZE_BODIES = "yes";
     assert.equal(isSanitizeBodies(), false);
+  });
+});
+
+// ─── isConfirmDestructive ────────────────────────────────────────
+
+describe("isConfirmDestructive", () => {
+  const originalEnv = process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE;
+    } else {
+      process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = originalEnv;
+    }
+  });
+
+  it("returns false when env var is not set", () => {
+    delete process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE;
+    assert.equal(isConfirmDestructive(), false);
+  });
+
+  it("returns true for 'true'", () => {
+    process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = "true";
+    assert.equal(isConfirmDestructive(), true);
+  });
+
+  it("returns true for '1'", () => {
+    process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = "1";
+    assert.equal(isConfirmDestructive(), true);
+  });
+
+  it("returns false for other values", () => {
+    process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = "yes";
+    assert.equal(isConfirmDestructive(), false);
+  });
+});
+
+// ─── needsConfirmation ──────────────────────────────────────────
+
+describe("needsConfirmation", () => {
+  const originalEnv = process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE;
+    } else {
+      process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = originalEnv;
+    }
+  });
+
+  it("returns null when confirm-destructive is not enabled", () => {
+    delete process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE;
+    assert.equal(needsConfirmation(false, "test_tool", "Test action."), null);
+  });
+
+  it("returns null when confirm-destructive is enabled and confirm is true", () => {
+    process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = "true";
+    assert.equal(needsConfirmation(true, "test_tool", "Test action."), null);
+  });
+
+  it("returns warning when confirm-destructive is enabled and confirm is false", () => {
+    process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = "true";
+    const result = needsConfirmation(false, "mail_send", "This will send an email.");
+    assert.ok(result !== null);
+    assert.ok(result!.content[0].text.includes("mail_send"));
+    assert.ok(result!.content[0].text.includes("confirm: true"));
+  });
+
+  it("includes the description in the warning", () => {
+    process.env.MACOS_MCP_CONFIRM_DESTRUCTIVE = "true";
+    const result = needsConfirmation(false, "test_tool", "This will delete everything.");
+    assert.ok(result !== null);
+    assert.ok(result!.content[0].text.includes("This will delete everything."));
   });
 });

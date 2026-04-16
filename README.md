@@ -69,6 +69,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 | `MACOS_MCP_REMINDER_LISTS` | Comma-separated reminder list names to include | All lists |
 | `MACOS_MCP_WRITE_RATE_LIMIT` | Max write operations per minute | 10 |
 | `MACOS_MCP_READONLY` | Disable all write tools (`true` or `1`) | Not set (all tools) |
+| `MACOS_MCP_CONFIRM_DESTRUCTIVE` | Require `confirm: true` on destructive tools (`true` or `1`) | Not set |
 
 ### Read-Only Mode
 
@@ -90,6 +91,26 @@ To disable all write operations (send, reply, forward, create, delete, etc.):
 
 When enabled, write tools are not registered and won't appear in the tool list, except `mail_move` and `mail_set_flags` (kept available for inbox triage workflows).
 Read operations (listing, searching, viewing) and FTS indexing remain available.
+
+### Confirm Destructive Mode
+
+To require explicit confirmation before destructive actions (sending email, deleting events/reminders):
+
+```json
+{
+  "mcpServers": {
+    "macos": {
+      "command": "npx",
+      "args": ["macos-mcp-server"],
+      "env": {
+        "MACOS_MCP_CONFIRM_DESTRUCTIVE": "true"
+      }
+    }
+  }
+}
+```
+
+When enabled, destructive tools (`mail_send`, `mail_reply`, `mail_forward`, `calendar_delete_event`, `reminders_delete`) require a `confirm: true` parameter. If omitted, the tool returns a warning asking the LLM to check with the user first. For `mail_reply` and `mail_forward`, confirmation is only required when `send: true` (the default) — saving as draft does not require confirmation.
 
 ## Tools (33)
 
